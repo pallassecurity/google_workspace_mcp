@@ -503,9 +503,9 @@ async def create_event(
         calendar_id (str): Calendar ID (default: 'primary').
         description (Optional[str]): Event description.
         location (Optional[str]): Event location.
-        attendees (Optional[List[str]]): Attendee email addresses.
+        attendees (List[str]): Attendee email addresses.
         timezone (Optional[str]): Timezone (e.g., "America/New_York").
-        attachments (Optional[List[str]]): List of Google Drive file URLs or IDs to attach to the event.
+        attachments (List[str]): List of Google Drive file URLs or IDs to attach to the event.
         add_google_meet (bool): Whether to add a Google Meet video conference to the event. Defaults to False.
         reminders (Optional[Union[str, List[Dict[str, Any]]]]): JSON string or list of reminder objects. Each should have 'method' ("popup" or "email") and 'minutes' (0-40320). Max 5 reminders. Example: '[{"method": "popup", "minutes": 15}]' or [{"method": "popup", "minutes": 15}]
         use_default_reminders (bool): Whether to use calendar's default reminders. If False, uses custom reminders. Defaults to True.
@@ -685,7 +685,7 @@ async def modify_event(
         end_time (Optional[str]): New end time (RFC3339, e.g., "2023-10-27T11:00:00-07:00" or "2023-10-28" for all-day).
         description (Optional[str]): New event description.
         location (Optional[str]): New event location.
-        attendees (Optional[List[str]]): New attendee email addresses.
+        attendees (List[str]): New attendee email addresses.
         timezone (Optional[str]): New timezone (e.g., "America/New_York").
         add_google_meet (Optional[bool]): Whether to add or remove Google Meet video conference. If True, adds Google Meet; if False, removes it; if None, leaves unchanged.
         reminders (Optional[Union[str, List[Dict[str, Any]]]]): JSON string or list of reminder objects to replace existing reminders. Each should have 'method' ("popup" or "email") and 'minutes' (0-40320). Max 5 reminders. Example: '[{"method": "popup", "minutes": 15}]' or [{"method": "popup", "minutes": 15}]

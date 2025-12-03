@@ -272,7 +272,7 @@ async def create_spreadsheet(
     Args:
         user_google_email (str): The user's Google email address. Required.
         title (str): The title of the new spreadsheet. Required.
-        sheet_names (Optional[List[str]]): List of sheet names to create. If not provided, creates one sheet with default name.
+        sheet_names (List[str]): List of sheet names to create. If not provided, creates one sheet with default name.
 
     Returns:
         str: Information about the newly created spreadsheet including ID and URL.

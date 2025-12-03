@@ -1256,8 +1256,8 @@ async def modify_gmail_message_labels(
     Args:
         user_google_email (str): The user's Google email address. Required.
         message_id (str): The ID of the message to modify.
-        add_label_ids (Optional[List[str]]): List of label IDs to add to the message.
-        remove_label_ids (Optional[List[str]]): List of label IDs to remove from the message.
+        add_label_ids (List[str]): List of label IDs to add to the message.
+        remove_label_ids (List[str]): List of label IDs to remove from the message.
 
     Returns:
         str: Confirmation message of the label changes applied to the message.
@@ -1306,8 +1306,8 @@ async def batch_modify_gmail_message_labels(
     Args:
         user_google_email (str): The user's Google email address. Required.
         message_ids (List[str]): A list of message IDs to modify.
-        add_label_ids (Optional[List[str]]): List of label IDs to add to the messages.
-        remove_label_ids (Optional[List[str]]): List of label IDs to remove from the messages.
+        add_label_ids (List[str]): List of label IDs to add to the messages.
+        remove_label_ids (List[str]): List of label IDs to remove from the messages.
 
     Returns:
         str: Confirmation message of the label changes applied to the messages.
