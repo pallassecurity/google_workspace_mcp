@@ -9,6 +9,7 @@ import asyncio
 import json
 from typing import List, Optional, Union
 
+from pydantic import Field
 
 from auth.service_decorator import require_google_service
 from core.server import server
@@ -263,7 +264,7 @@ async def create_spreadsheet(
     service,
     user_google_email: str,
     title: str,
-    sheet_names: Optional[List[str]] = None,
+    sheet_names: List[str] = Field(default=[], description="List of sheet names to create. If not provided, creates one sheet with default name."),
 ) -> str:
     """
     Creates a new Google Spreadsheet.

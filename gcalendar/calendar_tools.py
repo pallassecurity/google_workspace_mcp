@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Any, Union
 
 from googleapiclient.errors import HttpError
 from googleapiclient.discovery import build
+from pydantic import Field
 
 from auth.service_decorator import require_google_service
 from core.utils import handle_http_errors
@@ -483,9 +484,9 @@ async def create_event(
     calendar_id: str = "primary",
     description: Optional[str] = None,
     location: Optional[str] = None,
-    attendees: Optional[List[str]] = None,
+    attendees: List[str] = Field(default=[], description="Attendee email addresses."),
     timezone: Optional[str] = None,
-    attachments: Optional[List[str]] = None,
+    attachments: List[str] = Field(default=[], description="List of Google Drive file URLs or IDs to attach to the event."),
     add_google_meet: bool = False,
     reminders: Optional[Union[str, List[Dict[str, Any]]]] = None,
     use_default_reminders: bool = True,
@@ -665,7 +666,7 @@ async def modify_event(
     end_time: Optional[str] = None,
     description: Optional[str] = None,
     location: Optional[str] = None,
-    attendees: Optional[List[str]] = None,
+    attendees: List[str] = Field(default=[], description="Attendee email addresses."),
     timezone: Optional[str] = None,
     add_google_meet: Optional[bool] = None,
     reminders: Optional[Union[str, List[Dict[str, Any]]]] = None,
@@ -720,7 +721,7 @@ async def modify_event(
         event_body["description"] = description
     if location is not None:
         event_body["location"] = location
-    if attendees is not None:
+    if attendees:
         event_body["attendees"] = [{"email": email} for email in attendees]
     
     # Handle reminders
