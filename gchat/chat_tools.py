@@ -29,9 +29,6 @@ async def list_spaces(
 ) -> str:
     """
     Lists Google Chat spaces (rooms and direct messages) accessible to the user.
-
-    Returns:
-        str: A formatted list of Google Chat spaces accessible to the user.
     """
     logger.info(f"[list_spaces] Email={user_google_email}, Type={space_type}")
 
@@ -74,9 +71,6 @@ async def get_messages(
 ) -> str:
     """
     Retrieves messages from a Google Chat space.
-
-    Returns:
-        str: Formatted messages from the specified space.
     """
     logger.info(f"[get_messages] Space ID: '{space_id}' for user '{user_google_email}'")
 
@@ -122,9 +116,6 @@ async def send_message(
 ) -> str:
     """
     Sends a message to a Google Chat space.
-
-    Returns:
-        str: Confirmation message with sent message details.
     """
     logger.info(f"[send_message] Email: '{user_google_email}', Space: '{space_id}'")
 
@@ -161,9 +152,6 @@ async def search_messages(
 ) -> str:
     """
     Searches for messages in Google Chat spaces by text content.
-
-    Returns:
-        str: A formatted list of messages matching the search query.
     """
     logger.info(f"[search_messages] Email={user_google_email}, Query='{query}'")
 
