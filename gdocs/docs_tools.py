@@ -10,6 +10,7 @@ import io
 from typing import List, Dict, Any
 
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from pydantic import Field
 
 # Auth & server utilities
 from auth.service_decorator import require_google_service, require_multiple_services
@@ -59,9 +60,6 @@ async def search_docs(
 ) -> str:
     """
     Searches for Google Docs by name using Drive API (mimeType filter).
-
-    Returns:
-        str: A formatted list of Google Docs matching the search query.
     """
     logger.info(f"[search_docs] Email={user_google_email}, Query='{query}'")
 
@@ -110,9 +108,6 @@ async def get_doc_content(
     Retrieves content of a Google Doc or a Drive file (like .docx) identified by document_id.
     - Native Google Docs: Fetches content via Docs API.
     - Office files (.docx, etc.) stored in Drive: Downloads via Drive API and extracts text.
-
-    Returns:
-        str: The document content with metadata header.
     """
     logger.info(
         f"[get_doc_content] Invoked. Document/File ID: '{document_id}' for user '{user_google_email}'"
@@ -271,9 +266,6 @@ async def list_docs_in_folder(
 ) -> str:
     """
     Lists Google Docs within a specific Drive folder.
-
-    Returns:
-        str: A formatted list of Google Docs in the specified folder.
     """
     logger.info(
         f"[list_docs_in_folder] Invoked. Email: '{user_google_email}', Folder ID: '{folder_id}'"
@@ -340,34 +332,19 @@ async def create_doc(
 @require_google_service("docs", "docs_write")
 async def modify_doc_text(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    start_index: int,
-    end_index: int = None,
-    text: str = None,
-    bold: bool = None,
-    italic: bool = None,
-    underline: bool = None,
-    font_size: int = None,
-    font_family: str = None,
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to update"),
+    start_index: int = Field(description="Start position for operation (0-based)"),
+    end_index: int = Field(default=None, description="End position for text replacement/formatting (if not provided with text, text is inserted)"),
+    text: str = Field(default=None, description="New text to insert or replace with (optional - can format existing text without changing it)"),
+    bold: bool = Field(default=None, description="Whether to make text bold (True/False/None to leave unchanged)"),
+    italic: bool = Field(default=None, description="Whether to make text italic (True/False/None to leave unchanged)"),
+    underline: bool = Field(default=None, description="Whether to underline text (True/False/None to leave unchanged)"),
+    font_size: int = Field(default=None, description="Font size in points"),
+    font_family: str = Field(default=None, description='Font family name (e.g., "Arial", "Times New Roman")'),
 ) -> str:
     """
     Modifies text in a Google Doc - can insert/replace text and/or apply formatting in a single operation.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        start_index: Start position for operation (0-based)
-        end_index: End position for text replacement/formatting (if not provided with text, text is inserted)
-        text: New text to insert or replace with (optional - can format existing text without changing it)
-        bold: Whether to make text bold (True/False/None to leave unchanged)
-        italic: Whether to make text italic (True/False/None to leave unchanged)
-        underline: Whether to underline text (True/False/None to leave unchanged)
-        font_size: Font size in points
-        font_family: Font family name (e.g., "Arial", "Times New Roman")
-
-    Returns:
-        str: Confirmation message with operation details
     """
     logger.info(
         f"[modify_doc_text] Doc={document_id}, start={start_index}, end={end_index}, text={text is not None}, formatting={any([bold, italic, underline, font_size, font_family])}"
@@ -526,24 +503,14 @@ async def modify_doc_text(
 @require_google_service("docs", "docs_write")
 async def find_and_replace_doc(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    find_text: str,
-    replace_text: str,
-    match_case: bool = False,
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to update"),
+    find_text: str = Field(description="Text to search for"),
+    replace_text: str = Field(description="Text to replace with"),
+    match_case: bool = Field(default=False, description="Whether to match case exactly"),
 ) -> str:
     """
     Finds and replaces text throughout a Google Doc.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        find_text: Text to search for
-        replace_text: Text to replace with
-        match_case: Whether to match case exactly
-
-    Returns:
-        str: Confirmation message with replacement count
     """
     logger.info(
         f"[find_and_replace_doc] Doc={document_id}, find='{find_text}', replace='{replace_text}'"
@@ -573,30 +540,17 @@ async def find_and_replace_doc(
 @require_google_service("docs", "docs_write")
 async def insert_doc_elements(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    element_type: str,
-    index: int,
-    rows: int = None,
-    columns: int = None,
-    list_type: str = None,
-    text: str = None,
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to update"),
+    element_type: str = Field(description='Type of element to insert ("table", "list", "page_break")'),
+    index: int = Field(description="Position to insert element (0-based)"),
+    rows: int = Field(default=None, description="Number of rows for table (required for table)"),
+    columns: int = Field(default=None, description="Number of columns for table (required for table)"),
+    list_type: str = Field(default=None, description='Type of list ("UNORDERED", "ORDERED") (required for list)'),
+    text: str = Field(default=None, description="Initial text content for list items"),
 ) -> str:
     """
     Inserts structural elements like tables, lists, or page breaks into a Google Doc.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        element_type: Type of element to insert ("table", "list", "page_break")
-        index: Position to insert element (0-based)
-        rows: Number of rows for table (required for table)
-        columns: Number of columns for table (required for table)
-        list_type: Type of list ("UNORDERED", "ORDERED") (required for list)
-        text: Initial text content for list items
-
-    Returns:
-        str: Confirmation message with insertion details
     """
     logger.info(
         f"[insert_doc_elements] Doc={document_id}, type={element_type}, index={index}"
@@ -665,26 +619,15 @@ async def insert_doc_elements(
 async def insert_doc_image(
     docs_service: Any,
     drive_service: Any,
-    user_google_email: str,
-    document_id: str,
-    image_source: str,
-    index: int,
-    width: int = 0,
-    height: int = 0,
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to update"),
+    image_source: str = Field(description="Drive file ID or public image URL"),
+    index: int = Field(description="Position to insert image (0-based)"),
+    width: int = Field(default=0, description="Image width in points (optional)"),
+    height: int = Field(default=0, description="Image height in points (optional)"),
 ) -> str:
     """
     Inserts an image into a Google Doc from Drive or a URL.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        image_source: Drive file ID or public image URL
-        index: Position to insert image (0-based)
-        width: Image width in points (optional)
-        height: Image height in points (optional)
-
-    Returns:
-        str: Confirmation message with insertion details
     """
     logger.info(
         f"[insert_doc_image] Doc={document_id}, source={image_source}, index={index}"
@@ -743,24 +686,14 @@ async def insert_doc_image(
 @require_google_service("docs", "docs_write")
 async def update_doc_headers_footers(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    section_type: str,
-    content: str,
-    header_footer_type: str = "DEFAULT",
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to update"),
+    section_type: str = Field(description='Type of section to update ("header" or "footer")'),
+    content: str = Field(description="Text content for the header/footer"),
+    header_footer_type: str = Field(default="DEFAULT", description='Type of header/footer ("DEFAULT", "FIRST_PAGE_ONLY", "EVEN_PAGE")'),
 ) -> str:
     """
     Updates headers or footers in a Google Doc.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        section_type: Type of section to update ("header" or "footer")
-        content: Text content for the header/footer
-        header_footer_type: Type of header/footer ("DEFAULT", "FIRST_PAGE_ONLY", "EVEN_PAGE")
-
-    Returns:
-        str: Confirmation message with update details
     """
     logger.info(f"[update_doc_headers_footers] Doc={document_id}, type={section_type}")
 
@@ -800,19 +733,12 @@ async def update_doc_headers_footers(
 @require_google_service("docs", "docs_write")
 async def batch_update_doc(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    operations: List[Dict[str, Any]],
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to update"),
+    operations: List[Dict[str, Any]] = Field(description="List of operation dictionaries. Each operation should contain: - type: Operation type ('insert_text', 'delete_text', 'replace_text', 'format_text', 'insert_table', 'insert_page_break'), - Additional parameters specific to each operation type"),
 ) -> str:
     """
     Executes multiple document operations in a single atomic batch update.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        operations: List of operation dictionaries. Each operation should contain:
-                   - type: Operation type ('insert_text', 'delete_text', 'replace_text', 'format_text', 'insert_table', 'insert_page_break')
-                   - Additional parameters specific to each operation type
 
     Example operations:
         [
@@ -820,9 +746,6 @@ async def batch_update_doc(
             {"type": "format_text", "start_index": 1, "end_index": 12, "bold": true},
             {"type": "insert_table", "index": 20, "rows": 2, "columns": 3}
         ]
-
-    Returns:
-        str: Confirmation message with batch operation results
     """
     logger.debug(f"[batch_update_doc] Doc={document_id}, operations={len(operations)}")
 
@@ -857,9 +780,9 @@ async def batch_update_doc(
 @require_google_service("docs", "docs_read")
 async def inspect_doc_structure(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    detailed: bool = False,
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to inspect"),
+    detailed: bool = Field(default=False, description="Whether to return detailed structure information"),
 ) -> str:
     """
     Essential tool for finding safe insertion points and understanding document structure.
@@ -884,11 +807,6 @@ async def inspect_doc_structure(
     Step 2: Note the "total_length" value
     Step 3: Use an index < total_length for table insertion
     Step 4: Create your table
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to inspect
-        detailed: Whether to return detailed structure information
 
     Returns:
         str: JSON string containing document structure and safe insertion indices
@@ -987,11 +905,11 @@ async def inspect_doc_structure(
 @require_google_service("docs", "docs_write")
 async def create_table_with_data(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    table_data: List[List[str]],
-    index: int,
-    bold_headers: bool = True,
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to update"),
+    table_data: List[List[str]] = Field(description='2D list of strings - EXACT format: [["col1", "col2"], ["row1col1", "row1col2"]]'),
+    index: int = Field(description="Document position (MANDATORY: get from inspect_doc_structure 'total_length')"),
+    bold_headers: bool = Field(default=True, description="Whether to make first row bold (default: true)"),
 ) -> str:
     """
     Creates a table and populates it with data in one reliable operation.
@@ -1023,13 +941,6 @@ async def create_table_with_data(
     - All rows MUST have same number of columns
     - Use empty strings "" for empty cells, never None
     - Use debug_table_structure after creation to verify results
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to update
-        table_data: 2D list of strings - EXACT format: [["col1", "col2"], ["row1col1", "row1col2"]]
-        index: Document position (MANDATORY: get from inspect_doc_structure 'total_length')
-        bold_headers: Whether to make first row bold (default: true)
 
     Returns:
         str: Confirmation with table details and link
@@ -1085,9 +996,9 @@ async def create_table_with_data(
 @require_google_service("docs", "docs_read")
 async def debug_table_structure(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    table_index: int = 0,
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the document to inspect"),
+    table_index: int = Field(default=0, description="Which table to debug (0 = first table, 1 = second table, etc.)"),
 ) -> str:
     """
     ESSENTIAL DEBUGGING TOOL - Use this whenever tables don't work as expected.
@@ -1117,11 +1028,6 @@ async def debug_table_structure(
     2. Before populating → Use this to plan your data format
     3. After population fails → Use this to see what went wrong
     4. When debugging → Compare your data array to actual table structure
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the document to inspect
-        table_index: Which table to debug (0 = first table, 1 = second table, etc.)
 
     Returns:
         str: Detailed JSON structure showing table layout, cell positions, and current content
@@ -1174,19 +1080,13 @@ async def debug_table_structure(
 @require_google_service("drive", "drive_file")
 async def export_doc_to_pdf(
     service: Any,
-    user_google_email: str,
-    document_id: str,
-    pdf_filename: str = None,
-    folder_id: str = None,
+    user_google_email: str = Field(description="User's Google email address"),
+    document_id: str = Field(description="ID of the Google Doc to export"),
+    pdf_filename: str = Field(default=None, description='Name for the PDF file (optional - if not provided, uses original name + "_PDF")'),
+    folder_id: str = Field(default=None, description="Drive folder ID to save PDF in (optional - if not provided, saves in root)"),
 ) -> str:
     """
     Exports a Google Doc to PDF format and saves it to Google Drive.
-
-    Args:
-        user_google_email: User's Google email address
-        document_id: ID of the Google Doc to export
-        pdf_filename: Name for the PDF file (optional - if not provided, uses original name + "_PDF")
-        folder_id: Drive folder ID to save PDF in (optional - if not provided, saves in root)
 
     Returns:
         str: Confirmation message with PDF file details and links
