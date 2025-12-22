@@ -1,0 +1,78 @@
+name: Test
+
+on:
+  - push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: 'latest'
+          enable-cache: true
+          cache-dependency-glob: '**/uv.lock'
+
+      - name: Sync uv dependencies
+        run: uv sync --dev
+
+      - name: Create artifact
+        run: |
+          tar -czf venv.tar.gz .venv
+
+      - name: Upload environment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-env
+          path: venv.tar.gz
+          retention-days: 1
+
+  format:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download environment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-env
+
+      - name: Extract environment
+        run: |
+          tar -xzf venv.tar.gz
+
+      - name: Run format check
+        run: |
+          .venv/bin/ruff format --check
+
+  check:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download environment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-env
+
+      - name: Extract environment
+        run: |
+          tar -xzf venv.tar.gz
+
+      - name: Run check
+        run: |
+          .venv/bin/ruff check
