@@ -335,13 +335,30 @@ async def modify_doc_text(
     user_google_email: str = Field(description="User's Google email address"),
     document_id: str = Field(description="ID of the document to update"),
     start_index: int = Field(description="Start position for operation (0-based)"),
-    end_index: int = Field(default=None, description="End position for text replacement/formatting (if not provided with text, text is inserted)"),
-    text: str = Field(default=None, description="New text to insert or replace with (optional - can format existing text without changing it)"),
-    bold: bool = Field(default=None, description="Whether to make text bold (True/False/None to leave unchanged)"),
-    italic: bool = Field(default=None, description="Whether to make text italic (True/False/None to leave unchanged)"),
-    underline: bool = Field(default=None, description="Whether to underline text (True/False/None to leave unchanged)"),
+    end_index: int = Field(
+        default=None,
+        description="End position for text replacement/formatting (if not provided with text, text is inserted)",
+    ),
+    text: str = Field(
+        default=None,
+        description="New text to insert or replace with (optional - can format existing text without changing it)",
+    ),
+    bold: bool = Field(
+        default=None,
+        description="Whether to make text bold (True/False/None to leave unchanged)",
+    ),
+    italic: bool = Field(
+        default=None,
+        description="Whether to make text italic (True/False/None to leave unchanged)",
+    ),
+    underline: bool = Field(
+        default=None,
+        description="Whether to underline text (True/False/None to leave unchanged)",
+    ),
     font_size: int = Field(default=None, description="Font size in points"),
-    font_family: str = Field(default=None, description='Font family name (e.g., "Arial", "Times New Roman")'),
+    font_family: str = Field(
+        default=None, description='Font family name (e.g., "Arial", "Times New Roman")'
+    ),
 ) -> str:
     """
     Modifies text in a Google Doc - can insert/replace text and/or apply formatting in a single operation.
@@ -507,7 +524,9 @@ async def find_and_replace_doc(
     document_id: str = Field(description="ID of the document to update"),
     find_text: str = Field(description="Text to search for"),
     replace_text: str = Field(description="Text to replace with"),
-    match_case: bool = Field(default=False, description="Whether to match case exactly"),
+    match_case: bool = Field(
+        default=False, description="Whether to match case exactly"
+    ),
 ) -> str:
     """
     Finds and replaces text throughout a Google Doc.
@@ -542,11 +561,20 @@ async def insert_doc_elements(
     service: Any,
     user_google_email: str = Field(description="User's Google email address"),
     document_id: str = Field(description="ID of the document to update"),
-    element_type: str = Field(description='Type of element to insert ("table", "list", "page_break")'),
+    element_type: str = Field(
+        description='Type of element to insert ("table", "list", "page_break")'
+    ),
     index: int = Field(description="Position to insert element (0-based)"),
-    rows: int = Field(default=None, description="Number of rows for table (required for table)"),
-    columns: int = Field(default=None, description="Number of columns for table (required for table)"),
-    list_type: str = Field(default=None, description='Type of list ("UNORDERED", "ORDERED") (required for list)'),
+    rows: int = Field(
+        default=None, description="Number of rows for table (required for table)"
+    ),
+    columns: int = Field(
+        default=None, description="Number of columns for table (required for table)"
+    ),
+    list_type: str = Field(
+        default=None,
+        description='Type of list ("UNORDERED", "ORDERED") (required for list)',
+    ),
     text: str = Field(default=None, description="Initial text content for list items"),
 ) -> str:
     """
@@ -688,9 +716,14 @@ async def update_doc_headers_footers(
     service: Any,
     user_google_email: str = Field(description="User's Google email address"),
     document_id: str = Field(description="ID of the document to update"),
-    section_type: str = Field(description='Type of section to update ("header" or "footer")'),
+    section_type: str = Field(
+        description='Type of section to update ("header" or "footer")'
+    ),
     content: str = Field(description="Text content for the header/footer"),
-    header_footer_type: str = Field(default="DEFAULT", description='Type of header/footer ("DEFAULT", "FIRST_PAGE_ONLY", "EVEN_PAGE")'),
+    header_footer_type: str = Field(
+        default="DEFAULT",
+        description='Type of header/footer ("DEFAULT", "FIRST_PAGE_ONLY", "EVEN_PAGE")',
+    ),
 ) -> str:
     """
     Updates headers or footers in a Google Doc.
@@ -735,7 +768,9 @@ async def batch_update_doc(
     service: Any,
     user_google_email: str = Field(description="User's Google email address"),
     document_id: str = Field(description="ID of the document to update"),
-    operations: List[Dict[str, Any]] = Field(description="List of operation dictionaries. Each operation should contain: - type: Operation type ('insert_text', 'delete_text', 'replace_text', 'format_text', 'insert_table', 'insert_page_break'), - Additional parameters specific to each operation type"),
+    operations: List[Dict[str, Any]] = Field(
+        description="List of operation dictionaries. Each operation should contain: - type: Operation type ('insert_text', 'delete_text', 'replace_text', 'format_text', 'insert_table', 'insert_page_break'), - Additional parameters specific to each operation type"
+    ),
 ) -> str:
     """
     Executes multiple document operations in a single atomic batch update.
@@ -782,7 +817,9 @@ async def inspect_doc_structure(
     service: Any,
     user_google_email: str = Field(description="User's Google email address"),
     document_id: str = Field(description="ID of the document to inspect"),
-    detailed: bool = Field(default=False, description="Whether to return detailed structure information"),
+    detailed: bool = Field(
+        default=False, description="Whether to return detailed structure information"
+    ),
 ) -> str:
     """
     Essential tool for finding safe insertion points and understanding document structure.
@@ -907,9 +944,15 @@ async def create_table_with_data(
     service: Any,
     user_google_email: str = Field(description="User's Google email address"),
     document_id: str = Field(description="ID of the document to update"),
-    table_data: List[List[str]] = Field(description='2D list of strings - EXACT format: [["col1", "col2"], ["row1col1", "row1col2"]]'),
-    index: int = Field(description="Document position (MANDATORY: get from inspect_doc_structure 'total_length')"),
-    bold_headers: bool = Field(default=True, description="Whether to make first row bold (default: true)"),
+    table_data: List[List[str]] = Field(
+        description='2D list of strings - EXACT format: [["col1", "col2"], ["row1col1", "row1col2"]]'
+    ),
+    index: int = Field(
+        description="Document position (MANDATORY: get from inspect_doc_structure 'total_length')"
+    ),
+    bold_headers: bool = Field(
+        default=True, description="Whether to make first row bold (default: true)"
+    ),
 ) -> str:
     """
     Creates a table and populates it with data in one reliable operation.
@@ -998,7 +1041,10 @@ async def debug_table_structure(
     service: Any,
     user_google_email: str = Field(description="User's Google email address"),
     document_id: str = Field(description="ID of the document to inspect"),
-    table_index: int = Field(default=0, description="Which table to debug (0 = first table, 1 = second table, etc.)"),
+    table_index: int = Field(
+        default=0,
+        description="Which table to debug (0 = first table, 1 = second table, etc.)",
+    ),
 ) -> str:
     """
     ESSENTIAL DEBUGGING TOOL - Use this whenever tables don't work as expected.
@@ -1082,8 +1128,14 @@ async def export_doc_to_pdf(
     service: Any,
     user_google_email: str = Field(description="User's Google email address"),
     document_id: str = Field(description="ID of the Google Doc to export"),
-    pdf_filename: str = Field(default=None, description='Name for the PDF file (optional - if not provided, uses original name + "_PDF")'),
-    folder_id: str = Field(default=None, description="Drive folder ID to save PDF in (optional - if not provided, saves in root)"),
+    pdf_filename: str = Field(
+        default=None,
+        description='Name for the PDF file (optional - if not provided, uses original name + "_PDF")',
+    ),
+    folder_id: str = Field(
+        default=None,
+        description="Drive folder ID to save PDF in (optional - if not provided, saves in root)",
+    ),
 ) -> str:
     """
     Exports a Google Doc to PDF format and saves it to Google Drive.
