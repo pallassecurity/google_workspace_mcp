@@ -11,7 +11,7 @@ from fastmcp import FastMCP
 from fastmcp.server.auth.providers.google import GoogleProvider
 
 from auth.oauth21_session_store import get_oauth21_session_store, set_auth_provider
-from auth.google_auth import handle_auth_callback, start_auth_flow, check_client_secrets
+from auth.google_auth import handle_auth_callback, check_client_secrets
 from auth.mcp_session_middleware import MCPSessionMiddleware
 from auth.oauth_responses import (
     create_error_response,
@@ -21,7 +21,6 @@ from auth.oauth_responses import (
 from auth.auth_info_middleware import AuthInfoMiddleware
 from auth.scopes import SCOPES, get_current_scopes  # noqa
 from core.config import (
-    USER_GOOGLE_EMAIL,
     get_transport_mode,
     set_transport_mode as _set_transport_mode,
     get_oauth_redirect_uri as get_oauth_redirect_uri_for_current_mode,
@@ -240,39 +239,3 @@ async def legacy_oauth2_callback(request: Request) -> HTMLResponse:
     except Exception as e:
         logger.error(f"Error processing OAuth callback: {str(e)}", exc_info=True)
         return create_server_error_response(str(e))
-
-
-@server.tool()
-async def start_google_auth(
-    service_name: str, user_google_email: str = USER_GOOGLE_EMAIL
-) -> str:
-    """
-    Manually initiate Google OAuth authentication flow.
-
-    NOTE: This tool should typically NOT be called directly. The authentication system
-    automatically handles credential checks and prompts for authentication when needed.
-    Only use this tool if:
-    1. You need to re-authenticate with different credentials
-    2. You want to proactively authenticate before using other tools
-    3. The automatic authentication flow failed and you need to retry
-
-    In most cases, simply try calling the Google Workspace tool you need - it will
-    automatically handle authentication if required.
-    """
-    if not user_google_email:
-        raise ValueError("user_google_email must be provided.")
-
-    error_message = check_client_secrets()
-    if error_message:
-        return f"**Authentication Error:** {error_message}"
-
-    try:
-        auth_message = await start_auth_flow(
-            user_google_email=user_google_email,
-            service_name=service_name,
-            redirect_uri=get_oauth_redirect_uri_for_current_mode(),
-        )
-        return auth_message
-    except Exception as e:
-        logger.error(f"Failed to start Google authentication flow: {e}", exc_info=True)
-        return f"**Error:** An unexpected error occurred: {e}"
