@@ -15,7 +15,7 @@ from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from auth.scopes import SCOPES, get_current_scopes  # noqa
+from auth.scopes import SCOPES, get_current_scopes, expand_scopes  # noqa
 from auth.oauth21_session_store import get_oauth21_session_store
 from auth.credential_store import get_credential_store
 from auth.oauth_config import get_oauth_config, is_stateless_mode
@@ -556,10 +556,11 @@ def get_credentials(
                     f"[get_credentials] Found OAuth 2.1 credentials for MCP session {session_id}"
                 )
 
-                # Check scopes
-                if not all(scope in credentials.scopes for scope in required_scopes):
+                # Check scopes (with hierarchy: broad scopes satisfy narrow requirements)
+                available = expand_scopes(set(credentials.scopes))
+                if not all(scope in available for scope in required_scopes):
                     logger.warning(
-                        f"[get_credentials] OAuth 2.1 credentials lack required scopes. Need: {required_scopes}, Have: {credentials.scopes}"
+                        f"[get_credentials] OAuth 2.1 credentials lack required scopes. Need: {required_scopes}, Have: {sorted(available)}"
                     )
                     return None
 
@@ -669,9 +670,10 @@ def get_credentials(
         f"[get_credentials] Credentials found. Scopes: {credentials.scopes}, Valid: {credentials.valid}, Expired: {credentials.expired}"
     )
 
-    if not all(scope in credentials.scopes for scope in required_scopes):
+    available = expand_scopes(set(credentials.scopes))
+    if not all(scope in available for scope in required_scopes):
         logger.warning(
-            f"[get_credentials] Credentials lack required scopes. Need: {required_scopes}, Have: {credentials.scopes}. User: '{user_google_email}', Session: '{session_id}'"
+            f"[get_credentials] Credentials lack required scopes. Need: {required_scopes}, Have: {sorted(available)}. User: '{user_google_email}', Session: '{session_id}'"
         )
         return None  # Re-authentication needed for scopes
 

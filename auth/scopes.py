@@ -102,8 +102,8 @@ TOOL_SCOPES_MAP = {
     "gmail": GMAIL_SCOPES,
     "drive": DRIVE_SCOPES,
     "calendar": CALENDAR_SCOPES,
-    "docs": DOCS_SCOPES,
-    "sheets": SHEETS_SCOPES,
+    "docs": DOCS_SCOPES + [DRIVE_SCOPE],
+    "sheets": SHEETS_SCOPES + [DRIVE_SCOPE],
     "chat": CHAT_SCOPES,
     "forms": FORMS_SCOPES,
     "slides": SLIDES_SCOPES,
@@ -176,6 +176,24 @@ def get_scopes_for_tools(enabled_tools=None):
 
     # Return unique scopes
     return list(set(scopes))
+
+
+SCOPE_HIERARCHY = {
+    DRIVE_SCOPE: [DRIVE_READONLY_SCOPE, DRIVE_FILE_SCOPE],
+    DOCS_WRITE_SCOPE: [DOCS_READONLY_SCOPE],
+    SHEETS_WRITE_SCOPE: [SHEETS_READONLY_SCOPE],
+    CALENDAR_SCOPE: [CALENDAR_READONLY_SCOPE, CALENDAR_EVENTS_SCOPE],
+    GMAIL_MODIFY_SCOPE: [GMAIL_READONLY_SCOPE],
+}
+
+
+def expand_scopes(scopes):
+    """Expand a set of scopes with any implied narrower scopes via SCOPE_HIERARCHY."""
+    expanded = set(scopes)
+    for scope in list(expanded):
+        if scope in SCOPE_HIERARCHY:
+            expanded.update(SCOPE_HIERARCHY[scope])
+    return expanded
 
 
 # Combined scopes for all supported Google Workspace operations (backwards compatibility)

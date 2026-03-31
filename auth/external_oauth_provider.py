@@ -7,8 +7,9 @@ access tokens (ya29.*) are issued by external systems and need validation.
 
 import logging
 import time
-from typing import Optional
+from typing import Optional, List
 
+import httpx
 from fastmcp.server.auth.providers.google import GoogleProvider
 from fastmcp.server.auth import AccessToken
 from google.oauth2.credentials import Credentials
@@ -30,6 +31,29 @@ class ExternalOAuthProvider(GoogleProvider):
         # Store credentials as they're not exposed by parent class
         self._client_id = client_id
         self._client_secret = client_secret
+
+    async def _get_token_scopes(self, token: str) -> List[str]:
+        """Read the actual granted scopes from Google's tokeninfo endpoint."""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    "https://www.googleapis.com/oauth2/v3/tokeninfo",
+                    params={"access_token": token},
+                    timeout=5.0,
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                scope_str = data.get("scope", "")
+                if scope_str:
+                    scopes = scope_str.split()
+                    logger.debug(f"Token scopes from tokeninfo: {scopes}")
+                    return scopes
+        except Exception as e:
+            logger.warning(f"Failed to read token scopes from tokeninfo: {e}")
+
+        fallback = list(getattr(self, "required_scopes", []) or [])
+        logger.warning(f"Falling back to configured scopes: {fallback}")
+        return fallback
 
     async def verify_token(self, token: str) -> Optional[AccessToken]:
         """
@@ -68,11 +92,9 @@ class ExternalOAuthProvider(GoogleProvider):
                         f"Validated external access token for: {user_info['email']}"
                     )
 
-                    # Create a mock AccessToken that the middleware expects
-                    # This matches the structure that FastMCP's AccessToken would have
                     from types import SimpleNamespace
 
-                    scope_list = list(getattr(self, "required_scopes", []) or [])
+                    scope_list = await self._get_token_scopes(token)
                     access_token = SimpleNamespace(
                         token=token,
                         scopes=scope_list,
