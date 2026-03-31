@@ -165,12 +165,16 @@ async def health_check(request: Request):
         version = metadata.version("workspace-mcp")
     except metadata.PackageNotFoundError:
         version = "dev"
+
+    from auth.scopes import _ENABLED_TOOLS
+
     return JSONResponse(
         {
             "status": "healthy",
             "service": "workspace-mcp",
             "version": version,
             "transport": get_transport_mode(),
+            "tools": sorted(_ENABLED_TOOLS) if _ENABLED_TOOLS else "all",
         }
     )
 

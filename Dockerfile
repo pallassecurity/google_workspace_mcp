@@ -33,7 +33,7 @@ ARG PORT
 EXPOSE ${PORT:-8000}
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
     CMD sh -c 'curl -f http://localhost:${PORT:-8000}/health || exit 1'
 
 # Set environment variables for Python startup args
