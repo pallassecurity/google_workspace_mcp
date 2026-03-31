@@ -17,6 +17,7 @@ from auth.oauth21_session_store import (
 from auth.oauth_config import is_oauth21_enabled, get_oauth_config
 from core.context import set_fastmcp_session_id
 from auth.scopes import (
+    expand_scopes,
     GMAIL_READONLY_SCOPE,
     GMAIL_SEND_SCOPE,
     GMAIL_COMPOSE_SCOPE,
@@ -248,6 +249,7 @@ async def get_authenticated_google_service_oauth21(
         scopes_available = set(credentials.scopes or [])
         if not scopes_available and getattr(access_token, "scopes", None):
             scopes_available = set(access_token.scopes)
+        scopes_available = expand_scopes(scopes_available)
 
         if not all(scope in scopes_available for scope in required_scopes):
             raise GoogleAuthenticationError(
@@ -278,6 +280,7 @@ async def get_authenticated_google_service_oauth21(
         scopes_available = set(required_scopes)
     else:
         scopes_available = set(credentials.scopes)
+    scopes_available = expand_scopes(scopes_available)
 
     if not all(scope in scopes_available for scope in required_scopes):
         raise GoogleAuthenticationError(
