@@ -183,7 +183,15 @@ SCOPE_HIERARCHY = {
     DOCS_WRITE_SCOPE: [DOCS_READONLY_SCOPE],
     SHEETS_WRITE_SCOPE: [SHEETS_READONLY_SCOPE],
     CALENDAR_SCOPE: [CALENDAR_READONLY_SCOPE, CALENDAR_EVENTS_SCOPE],
-    GMAIL_MODIFY_SCOPE: [GMAIL_READONLY_SCOPE],
+    # gmail.modify is the broadest Gmail scope — it implies all narrower Gmail scopes
+    GMAIL_MODIFY_SCOPE: [
+        GMAIL_READONLY_SCOPE,
+        GMAIL_SEND_SCOPE,
+        GMAIL_COMPOSE_SCOPE,
+        GMAIL_LABELS_SCOPE,
+    ],
+    # gmail.compose includes the ability to create drafts and send messages
+    GMAIL_COMPOSE_SCOPE: [GMAIL_SEND_SCOPE],
 }
 
 
