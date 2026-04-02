@@ -194,6 +194,9 @@ class OAuth21SessionStore:
         self._mcp_session_mapping: Dict[
             str, str
         ] = {}  # Maps FastMCP session ID -> user email
+        self._mcp_session_timestamps: Dict[
+            str, datetime
+        ] = {}  # Tracks when each mcp_session_id entry was added (for TTL cleanup)
         self._session_auth_binding: Dict[
             str, str
         ] = {}  # Maps session ID -> authenticated user email (immutable)
@@ -214,6 +217,24 @@ class OAuth21SessionStore:
                 "Removed expired OAuth state: %s",
                 state[:8] if len(state) > 8 else state,
             )
+
+    def _cleanup_stale_mcp_sessions_locked(self, max_age_minutes: int = 120):
+        """Remove stale mcp_session_id entries. Caller must hold lock.
+
+        Entries are keyed by ephemeral FastMCP session UUIDs that accumulate
+        on every request. Google access tokens expire in ~1 hour, so a 2-hour
+        TTL ensures entries outlive their associated token before being removed.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
+        stale = [
+            sid for sid, ts in self._mcp_session_timestamps.items() if ts <= cutoff
+        ]
+        if stale:
+            for sid in stale:
+                self._mcp_session_mapping.pop(sid, None)
+                self._session_auth_binding.pop(sid, None)
+                del self._mcp_session_timestamps[sid]
+            logger.debug("Cleaned up %d stale MCP session mappings", len(stale))
 
     def store_oauth_state(
         self,
@@ -341,6 +362,9 @@ class OAuth21SessionStore:
 
             # Store MCP session mapping if provided
             if mcp_session_id:
+                # Periodically evict stale session mappings before adding new ones.
+                self._cleanup_stale_mcp_sessions_locked()
+
                 # Create immutable session binding (first binding wins, cannot be changed)
                 if mcp_session_id not in self._session_auth_binding:
                     self._session_auth_binding[mcp_session_id] = user_email
@@ -357,6 +381,9 @@ class OAuth21SessionStore:
                     )
 
                 self._mcp_session_mapping[mcp_session_id] = user_email
+                self._mcp_session_timestamps[mcp_session_id] = datetime.now(
+                    timezone.utc
+                )
                 logger.info(
                     f"Stored OAuth 2.1 session for {user_email} (session_id: {session_id}, mcp_session_id: {mcp_session_id})"
                 )
@@ -555,6 +582,7 @@ class OAuth21SessionStore:
                 # Remove from MCP mapping if exists
                 if mcp_session_id and mcp_session_id in self._mcp_session_mapping:
                     del self._mcp_session_mapping[mcp_session_id]
+                    self._mcp_session_timestamps.pop(mcp_session_id, None)
                     # Also remove from auth binding
                     if mcp_session_id in self._session_auth_binding:
                         del self._session_auth_binding[mcp_session_id]

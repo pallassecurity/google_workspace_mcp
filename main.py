@@ -296,6 +296,12 @@ def main():
         # Set transport mode for OAuth callback handling
         set_transport_mode(args.transport)
 
+        # Eliminate _server_instances session accumulation (MCP SDK memory leak).
+        # Stateless mode creates a self-contained transport per request and discards
+        # it immediately — no entry is ever written to _server_instances.
+        # setdefault allows override via environment variable if needed.
+        os.environ.setdefault("FASTMCP_STATELESS_HTTP", "true")
+
         # Configure auth initialization for FastMCP lifecycle events
         if args.transport == "streamable-http":
             configure_server_for_http()
