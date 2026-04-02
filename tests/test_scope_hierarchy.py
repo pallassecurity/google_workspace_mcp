@@ -9,7 +9,6 @@ Each case maps to a real Google API endpoint's "Authorization scopes" list
 as documented at https://developers.google.com/workspace/gmail/api/reference/rest/
 """
 
-import pytest
 from auth.scopes import (
     expand_scopes,
     DRIVE_SCOPE,
