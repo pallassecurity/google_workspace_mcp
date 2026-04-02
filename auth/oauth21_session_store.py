@@ -227,9 +227,7 @@ class OAuth21SessionStore:
         """
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)
         stale = [
-            sid
-            for sid, ts in self._mcp_session_timestamps.items()
-            if ts <= cutoff
+            sid for sid, ts in self._mcp_session_timestamps.items() if ts <= cutoff
         ]
         if stale:
             for sid in stale:
@@ -383,7 +381,9 @@ class OAuth21SessionStore:
                     )
 
                 self._mcp_session_mapping[mcp_session_id] = user_email
-                self._mcp_session_timestamps[mcp_session_id] = datetime.now(timezone.utc)
+                self._mcp_session_timestamps[mcp_session_id] = datetime.now(
+                    timezone.utc
+                )
                 logger.info(
                     f"Stored OAuth 2.1 session for {user_email} (session_id: {session_id}, mcp_session_id: {mcp_session_id})"
                 )

@@ -17,14 +17,13 @@ Two leak vectors were identified and fixed:
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
-
 from auth.oauth21_session_store import OAuth21SessionStore
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_store() -> OAuth21SessionStore:
     return OAuth21SessionStore()
@@ -51,6 +50,7 @@ def _add_session(store: OAuth21SessionStore, email: str, mcp_sid: str) -> None:
 # TTL cleanup tests
 # ---------------------------------------------------------------------------
 
+
 class TestTTLCleanup:
     def test_stale_entries_are_removed_after_ttl(self):
         """Entries older than max_age_minutes must be evicted on the next store_session call."""
@@ -75,7 +75,9 @@ class TestTTLCleanup:
         assert len(store._mcp_session_mapping) == 1
         assert fresh_sid in store._mcp_session_mapping
         assert len(store._mcp_session_timestamps) == 1
-        assert len(store._session_auth_binding) >= 1  # may also hold oauth session_id bindings
+        assert (
+            len(store._session_auth_binding) >= 1
+        )  # may also hold oauth session_id bindings
 
     def test_fresh_entries_are_not_removed(self):
         """Entries added recently must survive cleanup."""
@@ -149,6 +151,7 @@ class TestTTLCleanup:
 # Unbounded growth tests
 # ---------------------------------------------------------------------------
 
+
 class TestUnboundedGrowth:
     def test_dict_does_not_grow_unboundedly_under_load(self):
         """
@@ -206,6 +209,7 @@ class TestUnboundedGrowth:
 # ---------------------------------------------------------------------------
 # Stateless HTTP setting test
 # ---------------------------------------------------------------------------
+
 
 class TestStatelessHTTPSetting:
     def test_fastmcp_stateless_http_env_var_is_set_by_main(self):
