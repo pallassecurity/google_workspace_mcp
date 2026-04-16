@@ -10,15 +10,14 @@ def extract_pdf_text(file_bytes: bytes) -> Optional[str]:
     Extract plain text from a PDF document.
 
     Returns plain text when the PDF contains extractable text, else None.
-    Requires the optional `pypdf` dependency at runtime.
+    If the PDF parser is unavailable or the PDF has no extractable text,
+    returns None so callers can fall back gracefully.
     """
     try:
         from pypdf import PdfReader
-    except ImportError as e:
-        logger.error("PDF text extraction requires the 'pypdf' package.")
-        raise RuntimeError(
-            "PDF text extraction requires the 'pypdf' package to be installed."
-        ) from e
+    except Exception as e:
+        logger.warning(f"PDF text extraction unavailable: {e}")
+        return None
 
     try:
         reader = PdfReader(io.BytesIO(file_bytes))

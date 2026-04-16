@@ -170,8 +170,9 @@ async def get_drive_file_content(
             body_text = pdf_text
         else:
             body_text = (
-                f"[No extractable text found in PDF for mimeType '{mime_type}' - "
-                f"{len(file_content_bytes)} bytes]"
+                f"[No extractable text found in PDF for mimeType '{mime_type}'. "
+                "The file may be scanned or image-only, and OCR may be required. "
+                f"Size: {len(file_content_bytes)} bytes]"
             )
     elif mime_type in office_mime_types:
         office_text = extract_office_xml_text(file_content_bytes, mime_type)
