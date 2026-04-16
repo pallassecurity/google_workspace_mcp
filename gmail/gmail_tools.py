@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 GMAIL_BATCH_SIZE = 25
 GMAIL_REQUEST_DELAY = 0.1
+
+
 def _extract_message_body(payload):
     """
     Helper function to extract plain text body from a Gmail message payload.
@@ -174,7 +176,10 @@ def _convert_html_to_readable_text(html_body: str) -> str:
     # Convert structural tags to simple readable formatting.
     replacements = [
         (r"<br\s*/?>", "\n"),
-        (r"</?(p|div|section|article|header|footer|aside|blockquote|table)\b[^>]*>", "\n\n"),
+        (
+            r"</?(p|div|section|article|header|footer|aside|blockquote|table)\b[^>]*>",
+            "\n\n",
+        ),
         (r"</?tr\b[^>]*>", "\n"),
         (r"</?(ul|ol)\b[^>]*>", "\n"),
         (r"<li\b[^>]*>", "\n- "),
