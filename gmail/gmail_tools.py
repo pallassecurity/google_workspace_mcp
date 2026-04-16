@@ -7,13 +7,14 @@ This module provides MCP tools for interacting with the Gmail API.
 import logging
 import asyncio
 import base64
-import html
 import re
 import ssl
 from typing import Optional, List, Dict, Literal, Any
 
 from email.mime.text import MIMEText
 
+import html2text
+from bs4 import BeautifulSoup, Comment
 from fastapi import Body
 from pydantic import Field
 
@@ -35,6 +36,82 @@ HTML_RENDERED_BODY_TRUNCATE_LIMIT = 20000
 HTML_RENDERED_BODY_TRUNCATION_NOTICE = (
     "\n\n[Message body truncated after HTML conversion...]"
 )
+_HTML_DROPPED_TAGS = {
+    "head",
+    "script",
+    "style",
+    "title",
+    "meta",
+    "link",
+    "svg",
+    "noscript",
+    "img",
+    "source",
+}
+_HIDDEN_STYLE_VALUES = {
+    "display": {"none"},
+    "visibility": {"hidden"},
+    "opacity": {"0", "0.0"},
+    "font-size": {"0", "0px", "0em", "0rem", "0%"},
+    "mso-hide": {"all"},
+}
+
+
+def _parse_inline_style(style_value: Optional[str]) -> dict[str, str]:
+    """
+    Parse an inline style attribute into normalized property/value pairs.
+    """
+    if not style_value:
+        return {}
+
+    parsed_styles = {}
+    for declaration in style_value.split(";"):
+        if ":" not in declaration:
+            continue
+        property_name, property_value = declaration.split(":", 1)
+        parsed_styles[property_name.strip().lower()] = property_value.strip().lower()
+    return parsed_styles
+
+
+def _tag_hides_element(tag) -> bool:
+    """
+    Check whether an HTML tag should be considered hidden.
+    """
+    if getattr(tag, "attrs", None) is None:
+        return False
+
+    if tag.has_attr("hidden"):
+        return True
+
+    if str(tag.get("aria-hidden", "")).strip().lower() == "true":
+        return True
+
+    styles = _parse_inline_style(tag.get("style"))
+    for property_name, hidden_values in _HIDDEN_STYLE_VALUES.items():
+        if styles.get(property_name) in hidden_values:
+            return True
+    return False
+
+
+def _clean_html_for_readable_text(html_body: str) -> str:
+    """
+    Strip hidden and non-content HTML using a DOM parser before rendering.
+    """
+    soup = BeautifulSoup(html_body, "html.parser")
+
+    for comment in soup.find_all(string=lambda value: isinstance(value, Comment)):
+        comment.extract()
+
+    for tag_name in _HTML_DROPPED_TAGS:
+        for tag in soup.find_all(tag_name):
+            tag.decompose()
+
+    for tag in list(soup.find_all(True)):
+        if _tag_hides_element(tag):
+            tag.decompose()
+
+    body = soup.body or soup
+    return "".join(str(node) for node in body.contents)
 
 
 def _extract_message_body(payload):
@@ -166,73 +243,18 @@ def _convert_html_to_readable_text(html_body: str) -> str:
     if not html_body.strip():
         return ""
 
-    content = html_body
+    cleaned_html = _clean_html_for_readable_text(html_body)
 
-    # Remove boilerplate and non-content sections.
-    content = re.sub(r"<!DOCTYPE[^>]*>", "", content, flags=re.IGNORECASE)
-    content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
-    content = re.sub(
-        r"<([a-z0-9]+)\b[^>]*(?:\shidden\b|style\s*=\s*(?:"
-        r"['\"][^'\"]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|font-size\s*:\s*0|mso-hide\s*:\s*all)"
-        r"[^'\"]*['\"]|[^>\s]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|font-size\s*:\s*0|mso-hide\s*:\s*all)[^>\s]*))[^>]*>.*?</\1>",
-        "",
-        content,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    content = re.sub(
-        r"<(head|script|style|title|meta|link|svg|noscript)[^>]*>.*?</\1>",
-        "",
-        content,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    content = re.sub(
-        r"<(meta|link|img|source)[^>]*?/?>",
-        "",
-        content,
-        flags=re.IGNORECASE,
-    )
+    renderer = html2text.HTML2Text()
+    renderer.body_width = 0
+    renderer.ignore_links = True
+    renderer.ignore_images = True
+    renderer.ignore_emphasis = False
+    renderer.single_line_break = False
 
-    # Keep visible anchor text but drop hrefs and other link markup.
-    content = re.sub(
-        r"<a\b[^>]*>(.*?)</a>",
-        r"\1",
-        content,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-    # Convert structural tags to simple readable formatting.
-    replacements = [
-        (r"<br\s*/?>", "\n"),
-        (
-            r"</?(p|div|section|article|header|footer|aside|blockquote|table)\b[^>]*>",
-            "\n\n",
-        ),
-        (r"</?tr\b[^>]*>", "\n"),
-        (r"</?(ul|ol)\b[^>]*>", "\n"),
-        (r"<li\b[^>]*>", "\n- "),
-        (r"</li>", ""),
-        (r"<h1\b[^>]*>", "\n\n# "),
-        (r"<h2\b[^>]*>", "\n\n## "),
-        (r"<h3\b[^>]*>", "\n\n### "),
-        (r"<h4\b[^>]*>", "\n\n#### "),
-        (r"<h5\b[^>]*>", "\n\n##### "),
-        (r"<h6\b[^>]*>", "\n\n###### "),
-        (r"</h[1-6]>", "\n\n"),
-        (r"</?(td|th)\b[^>]*>", " | "),
-        (r"<hr\b[^>]*>", "\n\n---\n\n"),
-    ]
-    for pattern, replacement in replacements:
-        content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
-
-    # Strip the remaining tags and decode entities.
-    content = re.sub(r"<[^>]+>", "", content)
-    content = html.unescape(content)
-
-    # Clean up common formatting artifacts from tag replacement.
-    content = re.sub(r"(?:\s*\|\s*){2,}", " | ", content)
-    content = re.sub(r"^\s*\|\s*", "", content, flags=re.MULTILINE)
-    content = re.sub(r"\s*\|\s*$", "", content, flags=re.MULTILINE)
-    content = re.sub(r"[ \t]{2,}", " ", content)
+    content = renderer.handle(cleaned_html)
+    # Match the existing lightweight bullet style.
+    content = re.sub(r"(?m)^\s*[*+]\s+", "- ", content)
 
     return _truncate_rendered_body_text(_normalize_body_text(content))
 

@@ -68,6 +68,48 @@ def test_format_body_content_strips_hidden_preheader_with_unquoted_style():
     assert "Visible text" in result
 
 
+def test_format_body_content_strips_nested_hidden_wrapper_with_same_tag():
+    html_body = (
+        '<div style="display:none"><div>Hidden 1</div>Hidden 2</div>'
+        "<p>Visible text</p>"
+    )
+
+    result = _format_body_content("", html_body)
+
+    assert "Hidden 1" not in result
+    assert "Hidden 2" not in result
+    assert "Visible text" in result
+
+
+def test_format_body_content_preserves_visible_text_after_malformed_hidden_block():
+    html_body = (
+        '<div style="display:none"><p>Hidden<p>Still hidden</div>'
+        "<p>Visible text</p>"
+    )
+
+    result = _format_body_content("", html_body)
+
+    assert "Hidden" not in result
+    assert "Still hidden" not in result
+    assert "Visible text" in result
+
+
+def test_format_body_content_does_not_hide_opacity_point_five():
+    html_body = '<div style="opacity:0.5">Visible text</div>'
+
+    result = _format_body_content("", html_body)
+
+    assert "Visible text" in result
+
+
+def test_format_body_content_does_not_hide_small_nonzero_font_size():
+    html_body = '<div style="font-size:0.8em">Visible text</div>'
+
+    result = _format_body_content("", html_body)
+
+    assert "Visible text" in result
+
+
 def test_format_body_content_truncates_large_rendered_html_output():
     html_body = "<p>Hello world.</p>" * 5000
 

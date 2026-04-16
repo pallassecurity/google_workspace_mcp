@@ -10,11 +10,13 @@ readme = "README.md"
 keywords = [ "mcp", "google", "workspace", "llm", "ai", "claude", "model", "context", "protocol", "server"]
 requires-python = ">=3.10"
 dependencies = [
+ "beautifulsoup4>=4.14.3",
  "fastapi>=0.115.12",
  "fastmcp==2.12.5",
  "google-api-python-client>=2.168.0",
  "google-auth-httplib2>=0.2.0",
  "google-auth-oauthlib>=1.2.2",
+ "html2text>=2025.4.15",
  "httpx>=0.28.1",
  "pyjwt>=2.10.1",
  "python-dotenv>=1.1.0",
