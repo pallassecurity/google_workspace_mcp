@@ -7,6 +7,8 @@ This module provides MCP tools for interacting with the Gmail API.
 import logging
 import asyncio
 import base64
+import html
+import re
 import ssl
 from typing import Optional, List, Dict, Literal, Any
 
@@ -29,9 +31,6 @@ logger = logging.getLogger(__name__)
 
 GMAIL_BATCH_SIZE = 25
 GMAIL_REQUEST_DELAY = 0.1
-HTML_BODY_TRUNCATE_LIMIT = 20000
-
-
 def _extract_message_body(payload):
     """
     Helper function to extract plain text body from a Gmail message payload.
@@ -100,26 +99,135 @@ def _extract_message_bodies(payload):
     return {"text": text_body, "html": html_body}
 
 
-def _format_body_content(text_body: str, html_body: str) -> str:
+def _normalize_body_text(content: str) -> str:
     """
-    Helper function to format message body content with HTML fallback and truncation.
+    Normalize body text while preserving readable structure.
+
+    Args:
+        content: Raw body text
+
+    Returns:
+        Cleaned text with normalized whitespace
+    """
+    if not content:
+        return ""
+
+    content = (
+        content.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\xa0", " ")
+        .replace("\u200b", "")
+    )
+    content = re.sub(r"[ \t]+\n", "\n", content)
+    content = re.sub(r"\n[ \t]+", "\n", content)
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    return content.strip()
+
+
+def _convert_html_to_readable_text(html_body: str) -> str:
+    """
+    Convert HTML email content to readable plain text / markdown-ish text.
+
+    Args:
+        html_body: Raw HTML body
+
+    Returns:
+        Readable text with non-content sections removed
+    """
+    if not html_body.strip():
+        return ""
+
+    content = html_body
+
+    # Remove boilerplate and non-content sections.
+    content = re.sub(r"<!DOCTYPE[^>]*>", "", content, flags=re.IGNORECASE)
+    content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
+    content = re.sub(
+        r"<([a-z0-9]+)\b[^>]*(?:\shidden\b|style\s*=\s*['\"][^'\"]*"
+        r"(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|font-size\s*:\s*0|mso-hide\s*:\s*all)"
+        r"[^'\"]*['\"])[^>]*>.*?</\1>",
+        "",
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    content = re.sub(
+        r"<(head|script|style|title|meta|link|svg|noscript)[^>]*>.*?</\1>",
+        "",
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    content = re.sub(
+        r"<(meta|link|img|source)[^>]*?/?>",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+
+    # Keep visible anchor text but drop hrefs and other link markup.
+    content = re.sub(
+        r"<a\b[^>]*>(.*?)</a>",
+        r"\1",
+        content,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    # Convert structural tags to simple readable formatting.
+    replacements = [
+        (r"<br\s*/?>", "\n"),
+        (r"</?(p|div|section|article|header|footer|aside|blockquote|table)\b[^>]*>", "\n\n"),
+        (r"</?tr\b[^>]*>", "\n"),
+        (r"</?(ul|ol)\b[^>]*>", "\n"),
+        (r"<li\b[^>]*>", "\n- "),
+        (r"</li>", ""),
+        (r"<h1\b[^>]*>", "\n\n# "),
+        (r"<h2\b[^>]*>", "\n\n## "),
+        (r"<h3\b[^>]*>", "\n\n### "),
+        (r"<h4\b[^>]*>", "\n\n#### "),
+        (r"<h5\b[^>]*>", "\n\n##### "),
+        (r"<h6\b[^>]*>", "\n\n###### "),
+        (r"</h[1-6]>", "\n\n"),
+        (r"</?(td|th)\b[^>]*>", " | "),
+        (r"<hr\b[^>]*>", "\n\n---\n\n"),
+    ]
+    for pattern, replacement in replacements:
+        content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
+
+    # Strip the remaining tags and decode entities.
+    content = re.sub(r"<[^>]+>", "", content)
+    content = html.unescape(content)
+
+    # Clean up common formatting artifacts from tag replacement.
+    content = re.sub(r"(?:\s*\|\s*){2,}", " | ", content)
+    content = re.sub(r"^\s*\|\s*", "", content, flags=re.MULTILINE)
+    content = re.sub(r"\s*\|\s*$", "", content, flags=re.MULTILINE)
+    content = re.sub(r"[ \t]{2,}", " ", content)
+
+    return _normalize_body_text(content)
+
+
+def _format_body_content(
+    text_body: str,
+    html_body: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
+) -> str:
+    """
+    Helper function to format message body content with HTML fallback.
 
     Args:
         text_body: Plain text body content
         html_body: HTML body content
+        output_format: Response rendering format
 
     Returns:
         Formatted body content string
     """
     if text_body.strip():
-        return text_body
+        return _normalize_body_text(text_body)
     elif html_body.strip():
-        # Truncate very large HTML to keep responses manageable
-        if len(html_body) > HTML_BODY_TRUNCATE_LIMIT:
-            html_body = (
-                html_body[:HTML_BODY_TRUNCATE_LIMIT] + "\n\n[HTML content truncated...]"
-            )
-        return f"[HTML Content Converted]\n{html_body}"
+        if output_format == "raw":
+            return html_body.strip()
+        converted = _convert_html_to_readable_text(html_body)
+        return converted or "[No readable content found]"
     else:
         return "[No readable content found]"
 
@@ -174,25 +282,20 @@ def _format_message_output(
         return "\n".join(content_lines)
 
     content_lines = [
-        f"## {subject}",
-        f"- Message ID: `{message_id}`",
-        f"- From: {sender}",
-        f"- Open: [Gmail]({web_link})",
+        f"Subject: {subject}",
+        f"From: {sender}",
+        f"Message ID: {message_id}",
     ]
 
     if body_data is not None:
         content_lines.extend(["", normalized_body])
 
     if attachments:
-        content_lines.extend(["", "### Attachments"])
+        content_lines.extend(["", "Attachments:"])
         for att in attachments:
-            size_kb = att["size"] / 1024
             content_lines.append(
-                f"- `{att['filename']}` ({att['mimeType']}, {size_kb:.1f} KB, attachment_id `{att['attachmentId']}`)"
+                f"- {att['filename']} (Attachment ID: {att['attachmentId']})"
             )
-        content_lines.append(
-            f"Use `get_gmail_attachment_content(message_id=\"{message_id}\", attachment_id=\"...\")` to download a specific attachment."
-        )
 
     return "\n".join(content_lines)
 
@@ -511,7 +614,7 @@ async def get_gmail_message_content(
     html_body = bodies.get("html", "")
 
     # Format body content with HTML fallback
-    body_data = _format_body_content(text_body, html_body)
+    body_data = _format_body_content(text_body, html_body, output_format)
 
     # Extract attachment metadata
     attachments = _extract_attachments(payload)
@@ -692,7 +795,9 @@ async def get_gmail_messages_content_batch(
                     html_body = bodies.get("html", "")
 
                     # Format body content with HTML fallback
-                    body_data = _format_body_content(text_body, html_body)
+                    body_data = _format_body_content(
+                        text_body, html_body, output_format
+                    )
                     attachments = _extract_attachments(payload)
 
                     output_messages.append(
@@ -1051,10 +1156,9 @@ def _format_thread_content(
         ]
     else:
         content_lines = [
-            f"# {thread_subject}",
-            f"- Thread ID: `{thread_id}`",
-            f"- Messages: {len(messages)}",
-            f"- Open: [Gmail]({_generate_gmail_web_url(thread_id)})",
+            f"Subject: {thread_subject}",
+            f"Thread ID: {thread_id}",
+            f"Messages: {len(messages)}",
             "",
         ]
 
@@ -1077,7 +1181,7 @@ def _format_thread_content(
         html_body = bodies.get("html", "")
 
         # Format body content with HTML fallback
-        body_data = _format_body_content(text_body, html_body)
+        body_data = _format_body_content(text_body, html_body, output_format)
 
         if output_format == "raw":
             content_lines.extend(
@@ -1096,15 +1200,15 @@ def _format_thread_content(
         else:
             content_lines.extend(
                 [
-                    f"## Message {i}",
-                    f"- Message ID: `{message_id}`",
-                    f"- From: {sender}",
-                    f"- Date: {date}",
+                    f"Message {i}",
+                    f"Message ID: {message_id}",
+                    f"From: {sender}",
+                    f"Date: {date}",
                 ]
             )
 
             if subject != thread_subject:
-                content_lines.append(f"- Subject: {subject}")
+                content_lines.append(f"Subject: {subject}")
 
             content_lines.extend(["", body_data, ""])
 

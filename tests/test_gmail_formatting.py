@@ -18,12 +18,13 @@ def test_format_message_output_markdown_is_compact_and_actionable():
         output_format="markdown",
     )
 
-    assert "## Quarterly Update" in result
-    assert "- Message ID: `msg_123`" in result
-    assert "- Open: [Gmail](https://mail.google.com/mail/u/0/#all/msg_123)" in result
-    assert "### Attachments" in result
-    assert 'get_gmail_attachment_content(message_id="msg_123", attachment_id="...")' in result
+    assert "Subject: Quarterly Update" in result
+    assert "From: Alex <alex@example.com>" in result
+    assert "Message ID: msg_123" in result
+    assert "Attachments:" in result
+    assert "- report.pdf (Attachment ID: att_123)" in result
     assert "--- BODY ---" not in result
+    assert "Open: [Gmail]" not in result
 
 
 def test_format_message_output_raw_preserves_legacy_sections():
@@ -74,9 +75,9 @@ def test_format_thread_content_markdown_is_default_compact_layout():
 
     result = _format_thread_content(thread_data, "thread_123")
 
-    assert "# Team Sync" in result
-    assert "- Thread ID: `thread_123`" in result
-    assert "## Message 1" in result
-    assert "- Message ID: `msg_1`" in result
-    assert "- Subject: Re: Team Sync" in result
+    assert "Subject: Team Sync" in result
+    assert "Thread ID: thread_123" in result
+    assert "Message 1" in result
+    assert "Message ID: msg_1" in result
+    assert "Subject: Re: Team Sync" in result
     assert "=== Message 1 ===" not in result
