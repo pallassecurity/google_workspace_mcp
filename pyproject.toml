@@ -19,6 +19,7 @@ dependencies = [
  "html2text>=2025.4.15",
  "html5lib>=1.1",
  "httpx>=0.28.1",
+ "pypdf>=5.4.0",
  "pyjwt>=2.10.1",
  "python-dotenv>=1.1.0",
  "pyyaml>=6.0.2",

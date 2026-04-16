@@ -15,6 +15,7 @@ import httpx
 
 from auth.service_decorator import require_google_service
 from auth.oauth_config import is_stateless_mode
+from core.file_text_extractors import extract_pdf_text
 from core.utils import extract_office_xml_text, handle_http_errors
 from core.server import server
 from gdrive.drive_helpers import DRIVE_QUERY_PATTERNS, build_drive_list_params
@@ -113,6 +114,7 @@ async def get_drive_file_content(
     • Native Google Docs, Sheets, Slides → exported as text / CSV.
     • Office files (.docx, .xlsx, .pptx) → unzipped & parsed with std-lib to
       extract readable text.
+    • PDF files (.pdf) → downloaded as-is and text is extracted from the PDF.
     • Any other file → downloaded; tries UTF-8 decode, else notes binary.
 
     Args:
@@ -162,7 +164,17 @@ async def get_drive_file_content(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
 
-    if mime_type in office_mime_types:
+    if mime_type == "application/pdf":
+        pdf_text = extract_pdf_text(file_content_bytes)
+        if pdf_text:
+            body_text = pdf_text
+        else:
+            body_text = (
+                f"[No extractable text found in PDF for mimeType '{mime_type}'. "
+                "The file may be scanned or image-only, and OCR may be required. "
+                f"Size: {len(file_content_bytes)} bytes]"
+            )
+    elif mime_type in office_mime_types:
         office_text = extract_office_xml_text(file_content_bytes, mime_type)
         if office_text:
             body_text = office_text
