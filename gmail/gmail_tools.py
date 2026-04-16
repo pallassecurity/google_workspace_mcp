@@ -124,6 +124,79 @@ def _format_body_content(text_body: str, html_body: str) -> str:
         return "[No readable content found]"
 
 
+def _format_message_output(
+    message_id: str,
+    subject: str,
+    sender: str,
+    body_data: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    output_format: Literal["markdown", "raw"] = "markdown",
+) -> str:
+    """
+    Format a single message in either compact Markdown or legacy raw text.
+
+    Args:
+        message_id: Gmail message ID
+        subject: Message subject
+        sender: Message sender
+        body_data: Optional message body content
+        attachments: Optional attachment metadata
+        output_format: Rendering format for the response
+
+    Returns:
+        Formatted message content
+    """
+    web_link = _generate_gmail_web_url(message_id)
+    normalized_body = (body_data or "[No readable content found]").strip()
+    attachments = attachments or []
+
+    if output_format == "raw":
+        content_lines = [
+            f"Subject: {subject}",
+            f"From:    {sender}",
+            f"Message ID: {message_id}",
+            f"Web Link: {web_link}",
+        ]
+
+        if body_data is not None:
+            content_lines.append(f"\n--- BODY ---\n{normalized_body}")
+
+        if attachments:
+            content_lines.append("\n--- ATTACHMENTS ---")
+            for i, att in enumerate(attachments, 1):
+                size_kb = att["size"] / 1024
+                content_lines.append(
+                    f"{i}. {att['filename']} ({att['mimeType']}, {size_kb:.1f} KB)\n"
+                    f"   Attachment ID: {att['attachmentId']}\n"
+                    f"   Use get_gmail_attachment_content(message_id='{message_id}', attachment_id='{att['attachmentId']}') to download"
+                )
+
+        return "\n".join(content_lines)
+
+    content_lines = [
+        f"## {subject}",
+        f"- Message ID: `{message_id}`",
+        f"- From: {sender}",
+        f"- Open: [Gmail]({web_link})",
+    ]
+
+    if body_data is not None:
+        content_lines.extend(["", normalized_body])
+
+    if attachments:
+        content_lines.extend(["", "### Attachments"])
+        for att in attachments:
+            size_kb = att["size"] / 1024
+            content_lines.append(
+                f"- `{att['filename']}` ({att['mimeType']}, {size_kb:.1f} KB, attachment_id `{att['attachmentId']}`)"
+            )
+        content_lines.append(
+            f"Use `get_gmail_attachment_content(message_id=\"{message_id}\", attachment_id=\"...\")` to download a specific attachment."
+        )
+
+    return "\n".join(content_lines)
+
+
 def _extract_attachments(payload: dict) -> List[Dict[str, Any]]:
     """
     Extract attachment metadata from a Gmail message payload.
@@ -376,17 +449,22 @@ async def search_gmail_messages(
 )
 @require_google_service("gmail", "gmail_read")
 async def get_gmail_message_content(
-    service, message_id: str, user_google_email: str
+    service,
+    message_id: str,
+    user_google_email: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
 ) -> str:
     """
-    Retrieves the full content (subject, sender, plain text body) of a specific Gmail message.
+    Retrieves the full content of a specific Gmail message.
 
     Args:
         message_id (str): The unique ID of the Gmail message to retrieve.
         user_google_email (str): The user's Google email address. Required.
+        output_format (Literal["markdown", "raw"]): Response rendering format.
+            Defaults to compact Markdown, which keeps all the content except the format. ONLY use raw when absolutely necessary to see the entire content, which normally consume large amount of context window.
 
     Returns:
-        str: The message details including subject, sender, and body content.
+        str: The message details including subject, sender, body content, and attachments.
     """
     logger.info(
         f"[get_gmail_message_content] Invoked. Message ID: '{message_id}', Email: '{user_google_email}'"
@@ -438,24 +516,14 @@ async def get_gmail_message_content(
     # Extract attachment metadata
     attachments = _extract_attachments(payload)
 
-    content_lines = [
-        f"Subject: {subject}",
-        f"From:    {sender}",
-        f"\n--- BODY ---\n{body_data or '[No text/plain body found]'}",
-    ]
-
-    # Add attachment information if present
-    if attachments:
-        content_lines.append("\n--- ATTACHMENTS ---")
-        for i, att in enumerate(attachments, 1):
-            size_kb = att["size"] / 1024
-            content_lines.append(
-                f"{i}. {att['filename']} ({att['mimeType']}, {size_kb:.1f} KB)\n"
-                f"   Attachment ID: {att['attachmentId']}\n"
-                f"   Use get_gmail_attachment_content(message_id='{message_id}', attachment_id='{att['attachmentId']}') to download"
-            )
-
-    return "\n".join(content_lines)
+    return _format_message_output(
+        message_id=message_id,
+        subject=subject,
+        sender=sender,
+        body_data=body_data,
+        attachments=attachments,
+        output_format=output_format,
+    )
 
 
 @server.tool()
@@ -468,6 +536,7 @@ async def get_gmail_messages_content_batch(
     message_ids: List[str],
     user_google_email: str,
     format: Literal["full", "metadata"] = "full",
+    output_format: Literal["markdown", "raw"] = "markdown",
 ) -> str:
     """
     Retrieves the content of multiple Gmail messages in a single batch request.
@@ -477,6 +546,8 @@ async def get_gmail_messages_content_batch(
         message_ids (List[str]): List of Gmail message IDs to retrieve (max 25 per batch).
         user_google_email (str): The user's Google email address. Required.
         format (Literal["full", "metadata"]): Message format. "full" includes body, "metadata" only headers.
+        output_format (Literal["markdown", "raw"]): Response rendering format.
+            Defaults to compact Markdown, which keeps all the content except the format. ONLY use raw when absolutely necessary to see the entire content, which normally consume large amount of context window.
 
     Returns:
         str: A formatted list of message contents with separators.
@@ -600,10 +671,14 @@ async def get_gmail_messages_content_batch(
                     sender = headers.get("From", "(unknown sender)")
 
                     output_messages.append(
-                        f"Message ID: {mid}\n"
-                        f"Subject: {subject}\n"
-                        f"From: {sender}\n"
-                        f"Web Link: {_generate_gmail_web_url(mid)}\n"
+                        _format_message_output(
+                            message_id=mid,
+                            subject=subject,
+                            sender=sender,
+                            body_data=None,
+                            attachments=None,
+                            output_format=output_format,
+                        )
                     )
                 else:
                     # Full format - extract body too
@@ -618,18 +693,26 @@ async def get_gmail_messages_content_batch(
 
                     # Format body content with HTML fallback
                     body_data = _format_body_content(text_body, html_body)
+                    attachments = _extract_attachments(payload)
 
                     output_messages.append(
-                        f"Message ID: {mid}\n"
-                        f"Subject: {subject}\n"
-                        f"From: {sender}\n"
-                        f"Web Link: {_generate_gmail_web_url(mid)}\n"
-                        f"\n{body_data}\n"
+                        _format_message_output(
+                            message_id=mid,
+                            subject=subject,
+                            sender=sender,
+                            body_data=body_data,
+                            attachments=attachments,
+                            output_format=output_format,
+                        )
                     )
 
     # Combine all messages with separators
-    final_output = f"Retrieved {len(message_ids)} messages:\n\n"
-    final_output += "\n---\n\n".join(output_messages)
+    if output_format == "raw":
+        final_output = f"Retrieved {len(message_ids)} messages:\n\n"
+        final_output += "\n---\n\n".join(output_messages)
+    else:
+        final_output = f"# Messages ({len(message_ids)})\n\n"
+        final_output += "\n\n".join(output_messages)
 
     return final_output
 
@@ -932,7 +1015,11 @@ async def draft_gmail_message(
     return f"Draft created! Draft ID: {draft_id}"
 
 
-def _format_thread_content(thread_data: dict, thread_id: str) -> str:
+def _format_thread_content(
+    thread_data: dict,
+    thread_id: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
+) -> str:
     """
     Helper function to format thread content from Gmail API response.
 
@@ -955,13 +1042,21 @@ def _format_thread_content(thread_data: dict, thread_id: str) -> str:
     }
     thread_subject = first_headers.get("Subject", "(no subject)")
 
-    # Build the thread content
-    content_lines = [
-        f"Thread ID: {thread_id}",
-        f"Subject: {thread_subject}",
-        f"Messages: {len(messages)}",
-        "",
-    ]
+    if output_format == "raw":
+        content_lines = [
+            f"Thread ID: {thread_id}",
+            f"Subject: {thread_subject}",
+            f"Messages: {len(messages)}",
+            "",
+        ]
+    else:
+        content_lines = [
+            f"# {thread_subject}",
+            f"- Thread ID: `{thread_id}`",
+            f"- Messages: {len(messages)}",
+            f"- Open: [Gmail]({_generate_gmail_web_url(thread_id)})",
+            "",
+        ]
 
     # Process each message in the thread
     for i, message in enumerate(messages, 1):
@@ -973,6 +1068,7 @@ def _format_thread_content(thread_data: dict, thread_id: str) -> str:
         sender = headers.get("From", "(unknown sender)")
         date = headers.get("Date", "(unknown date)")
         subject = headers.get("Subject", "(no subject)")
+        message_id = message.get("id", "(unknown message id)")
 
         # Extract both text and HTML bodies
         payload = message.get("payload", {})
@@ -983,26 +1079,34 @@ def _format_thread_content(thread_data: dict, thread_id: str) -> str:
         # Format body content with HTML fallback
         body_data = _format_body_content(text_body, html_body)
 
-        # Add message to content
-        content_lines.extend(
-            [
-                f"=== Message {i} ===",
-                f"From: {sender}",
-                f"Date: {date}",
-            ]
-        )
+        if output_format == "raw":
+            content_lines.extend(
+                [
+                    f"=== Message {i} ===",
+                    f"From: {sender}",
+                    f"Date: {date}",
+                    f"Message ID: {message_id}",
+                ]
+            )
 
-        # Only show subject if it's different from thread subject
-        if subject != thread_subject:
-            content_lines.append(f"Subject: {subject}")
+            if subject != thread_subject:
+                content_lines.append(f"Subject: {subject}")
 
-        content_lines.extend(
-            [
-                "",
-                body_data,
-                "",
-            ]
-        )
+            content_lines.extend(["", body_data, ""])
+        else:
+            content_lines.extend(
+                [
+                    f"## Message {i}",
+                    f"- Message ID: `{message_id}`",
+                    f"- From: {sender}",
+                    f"- Date: {date}",
+                ]
+            )
+
+            if subject != thread_subject:
+                content_lines.append(f"- Subject: {subject}")
+
+            content_lines.extend(["", body_data, ""])
 
     return "\n".join(content_lines)
 
@@ -1011,7 +1115,10 @@ def _format_thread_content(thread_data: dict, thread_id: str) -> str:
 @require_google_service("gmail", "gmail_read")
 @handle_http_errors("get_gmail_thread_content", is_read_only=True, service_type="gmail")
 async def get_gmail_thread_content(
-    service, thread_id: str, user_google_email: str
+    service,
+    thread_id: str,
+    user_google_email: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
 ) -> str:
     """
     Retrieves the complete content of a Gmail conversation thread, including all messages.
@@ -1019,6 +1126,8 @@ async def get_gmail_thread_content(
     Args:
         thread_id (str): The unique ID of the Gmail thread to retrieve.
         user_google_email (str): The user's Google email address. Required.
+        output_format (Literal["markdown", "raw"]): Response rendering format.
+            Defaults to compact Markdown, which keeps all the content except the format. ONLY use raw when absolutely necessary to see the entire content, which normally consume large amount of context window.
 
     Returns:
         str: The complete thread content with all messages formatted for reading.
@@ -1032,7 +1141,7 @@ async def get_gmail_thread_content(
         service.users().threads().get(userId="me", id=thread_id, format="full").execute
     )
 
-    return _format_thread_content(thread_response, thread_id)
+    return _format_thread_content(thread_response, thread_id, output_format)
 
 
 @server.tool()
@@ -1044,6 +1153,7 @@ async def get_gmail_threads_content_batch(
     service,
     thread_ids: List[str],
     user_google_email: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
 ) -> str:
     """
     Retrieves the content of multiple Gmail threads in a single batch request.
@@ -1052,6 +1162,8 @@ async def get_gmail_threads_content_batch(
     Args:
         thread_ids (List[str]): A list of Gmail thread IDs to retrieve. The function will automatically batch requests in chunks of 25.
         user_google_email (str): The user's Google email address. Required.
+        output_format (Literal["markdown", "raw"]): Response rendering format.
+            Defaults to compact Markdown, which keeps all the content except the format. ONLY use raw when absolutely necessary to see the entire content, which normally consume large amount of context window.
 
     Returns:
         str: A formatted list of thread contents with separators.
@@ -1137,11 +1249,17 @@ async def get_gmail_threads_content_batch(
                     output_threads.append(f"⚠️ Thread {tid}: No data returned\n")
                     continue
 
-                output_threads.append(_format_thread_content(thread, tid))
+                output_threads.append(
+                    _format_thread_content(thread, tid, output_format)
+                )
 
     # Combine all threads with separators
-    header = f"Retrieved {len(thread_ids)} threads:"
-    return header + "\n\n" + "\n---\n\n".join(output_threads)
+    if output_format == "raw":
+        header = f"Retrieved {len(thread_ids)} threads:"
+        return header + "\n\n" + "\n---\n\n".join(output_threads)
+
+    header = f"# Threads ({len(thread_ids)})"
+    return header + "\n\n" + "\n\n".join(output_threads)
 
 
 @server.tool()
