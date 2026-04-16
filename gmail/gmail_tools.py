@@ -55,6 +55,55 @@ _HIDDEN_STYLE_VALUES = {
     "font-size": {"0", "0px", "0em", "0rem", "0%"},
     "mso-hide": {"all"},
 }
+_VISIBLE_FALLBACK_BOUNDARY_RE = re.compile(
+    r"<(?:div|p|table|tbody|thead|tfoot|tr|td|section|article|main|header|footer|ul|ol|h[1-6])\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_style_value(style_value: str) -> str:
+    """
+    Normalize a CSS inline style value for exact matching.
+    """
+    normalized = style_value.strip().lower()
+    normalized = re.sub(r"\s*!important\s*$", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+
+def _attrs_fragment_hides_element(attrs_fragment: str) -> bool:
+    """
+    Check whether a raw HTML attribute fragment marks an element as hidden.
+    """
+    if re.search(r"(?:^|\s)hidden(?:\s|=|>|$)", attrs_fragment, flags=re.IGNORECASE):
+        return True
+
+    aria_hidden_match = re.search(
+        r'aria-hidden\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))',
+        attrs_fragment,
+        flags=re.IGNORECASE,
+    )
+    if aria_hidden_match:
+        aria_hidden_value = next(
+            group for group in aria_hidden_match.groups() if group is not None
+        )
+        if aria_hidden_value.strip().lower() == "true":
+            return True
+
+    style_match = re.search(
+        r'style\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))',
+        attrs_fragment,
+        flags=re.IGNORECASE,
+    )
+    if not style_match:
+        return False
+
+    style_value = next(group for group in style_match.groups() if group is not None)
+    styles = _parse_inline_style(style_value)
+    for property_name, hidden_values in _HIDDEN_STYLE_VALUES.items():
+        if styles.get(property_name) in hidden_values:
+            return True
+    return False
 
 
 def _parse_inline_style(style_value: Optional[str]) -> dict[str, str]:
@@ -69,7 +118,9 @@ def _parse_inline_style(style_value: Optional[str]) -> dict[str, str]:
         if ":" not in declaration:
             continue
         property_name, property_value = declaration.split(":", 1)
-        parsed_styles[property_name.strip().lower()] = property_value.strip().lower()
+        parsed_styles[property_name.strip().lower()] = _normalize_style_value(
+            property_value
+        )
     return parsed_styles
 
 
@@ -97,7 +148,34 @@ def _clean_html_for_readable_text(html_body: str) -> str:
     """
     Strip hidden and non-content HTML using a DOM parser before rendering.
     """
-    soup = BeautifulSoup(html_body, "html.parser")
+    leading_hidden_match = re.match(
+        r"^\s*<(?P<tag>[a-z0-9]+)\b(?P<attrs>[^>]*)>",
+        html_body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if leading_hidden_match and _attrs_fragment_hides_element(
+        leading_hidden_match.group("attrs")
+    ):
+        tag_name = leading_hidden_match.group("tag")
+        close_tag_matches = list(
+            re.finditer(rf"</{tag_name}\s*>", html_body, flags=re.IGNORECASE)
+        )
+        open_tag_count = len(
+            re.findall(rf"<{tag_name}\b", html_body, flags=re.IGNORECASE)
+        )
+        if open_tag_count > len(close_tag_matches):
+            boundary_start = (
+                close_tag_matches[-1].end()
+                if close_tag_matches
+                else leading_hidden_match.end()
+            )
+            boundary_match = _VISIBLE_FALLBACK_BOUNDARY_RE.search(
+                html_body, boundary_start
+            )
+            if boundary_match:
+                html_body = html_body[boundary_match.start() :]
+
+    soup = BeautifulSoup(html_body, "html5lib")
 
     for comment in soup.find_all(string=lambda value: isinstance(value, Comment)):
         comment.extract()

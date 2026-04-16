@@ -70,8 +70,7 @@ def test_format_body_content_strips_hidden_preheader_with_unquoted_style():
 
 def test_format_body_content_strips_nested_hidden_wrapper_with_same_tag():
     html_body = (
-        '<div style="display:none"><div>Hidden 1</div>Hidden 2</div>'
-        "<p>Visible text</p>"
+        '<div style="display:none"><div>Hidden 1</div>Hidden 2</div><p>Visible text</p>'
     )
 
     result = _format_body_content("", html_body)
@@ -83,14 +82,25 @@ def test_format_body_content_strips_nested_hidden_wrapper_with_same_tag():
 
 def test_format_body_content_preserves_visible_text_after_malformed_hidden_block():
     html_body = (
-        '<div style="display:none"><p>Hidden<p>Still hidden</div>'
-        "<p>Visible text</p>"
+        '<div style="display:none"><p>Hidden<p>Still hidden</div><p>Visible text</p>'
     )
 
     result = _format_body_content("", html_body)
 
     assert "Hidden" not in result
     assert "Still hidden" not in result
+    assert "Visible text" in result
+
+
+def test_format_body_content_preserves_visible_text_after_malformed_hidden_div():
+    html_body = (
+        '<div style="display:none"><div>Hidden 1</div>Hidden 2<p>Visible text</p>'
+    )
+
+    result = _format_body_content("", html_body)
+
+    assert "Hidden 1" not in result
+    assert "Hidden 2" not in result
     assert "Visible text" in result
 
 
@@ -108,6 +118,24 @@ def test_format_body_content_does_not_hide_small_nonzero_font_size():
     result = _format_body_content("", html_body)
 
     assert "Visible text" in result
+
+
+def test_format_body_content_strips_hidden_preheader_with_display_none_important():
+    html_body = '<div style="display:none !important">Hidden</div><p>Visible</p>'
+
+    result = _format_body_content("", html_body)
+
+    assert "Hidden" not in result
+    assert "Visible" in result
+
+
+def test_format_body_content_strips_hidden_preheader_with_visibility_hidden_important():
+    html_body = '<div style="visibility:hidden !important">Hidden</div><p>Visible</p>'
+
+    result = _format_body_content("", html_body)
+
+    assert "Hidden" not in result
+    assert "Visible" in result
 
 
 def test_format_body_content_truncates_large_rendered_html_output():
