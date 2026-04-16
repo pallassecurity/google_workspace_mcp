@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 GMAIL_BATCH_SIZE = 25
 GMAIL_REQUEST_DELAY = 0.1
+HTML_RENDERED_BODY_TRUNCATE_LIMIT = 20000
+HTML_RENDERED_BODY_TRUNCATION_NOTICE = "\n\n[Message body truncated after HTML conversion...]"
 
 
 def _extract_message_body(payload):
@@ -126,6 +128,29 @@ def _normalize_body_text(content: str) -> str:
     return content.strip()
 
 
+def _truncate_rendered_body_text(content: str) -> str:
+    """
+    Keep rendered body text within a manageable size for default responses.
+
+    Args:
+        content: Rendered body text
+
+    Returns:
+        Original text or a truncated version with a notice
+    """
+    if len(content) <= HTML_RENDERED_BODY_TRUNCATE_LIMIT:
+        return content
+
+    limit = HTML_RENDERED_BODY_TRUNCATE_LIMIT - len(
+        HTML_RENDERED_BODY_TRUNCATION_NOTICE
+    )
+    if limit <= 0:
+        return HTML_RENDERED_BODY_TRUNCATION_NOTICE.lstrip()
+
+    truncated = content[:limit].rstrip()
+    return truncated + HTML_RENDERED_BODY_TRUNCATION_NOTICE
+
+
 def _convert_html_to_readable_text(html_body: str) -> str:
     """
     Convert HTML email content to readable plain text / markdown-ish text.
@@ -145,9 +170,9 @@ def _convert_html_to_readable_text(html_body: str) -> str:
     content = re.sub(r"<!DOCTYPE[^>]*>", "", content, flags=re.IGNORECASE)
     content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL)
     content = re.sub(
-        r"<([a-z0-9]+)\b[^>]*(?:\shidden\b|style\s*=\s*['\"][^'\"]*"
-        r"(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|font-size\s*:\s*0|mso-hide\s*:\s*all)"
-        r"[^'\"]*['\"])[^>]*>.*?</\1>",
+        r"<([a-z0-9]+)\b[^>]*(?:\shidden\b|style\s*=\s*(?:"
+        r"['\"][^'\"]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|font-size\s*:\s*0|mso-hide\s*:\s*all)"
+        r"[^'\"]*['\"]|[^>\s]*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|font-size\s*:\s*0|mso-hide\s*:\s*all)[^>\s]*))[^>]*>.*?</\1>",
         "",
         content,
         flags=re.IGNORECASE | re.DOTALL,
@@ -207,7 +232,7 @@ def _convert_html_to_readable_text(html_body: str) -> str:
     content = re.sub(r"\s*\|\s*$", "", content, flags=re.MULTILINE)
     content = re.sub(r"[ \t]{2,}", " ", content)
 
-    return _normalize_body_text(content)
+    return _truncate_rendered_body_text(_normalize_body_text(content))
 
 
 def _format_body_content(
@@ -227,10 +252,12 @@ def _format_body_content(
         Formatted body content string
     """
     if text_body.strip():
+        if output_format == "raw":
+            return text_body
         return _normalize_body_text(text_body)
     elif html_body.strip():
         if output_format == "raw":
-            return html_body.strip()
+            return html_body
         converted = _convert_html_to_readable_text(html_body)
         return converted or "[No readable content found]"
     else:
@@ -260,10 +287,10 @@ def _format_message_output(
         Formatted message content
     """
     web_link = _generate_gmail_web_url(message_id)
-    normalized_body = (body_data or "[No readable content found]").strip()
     attachments = attachments or []
 
     if output_format == "raw":
+        raw_body = body_data if body_data is not None else "[No readable content found]"
         content_lines = [
             f"Subject: {subject}",
             f"From:    {sender}",
@@ -272,7 +299,7 @@ def _format_message_output(
         ]
 
         if body_data is not None:
-            content_lines.append(f"\n--- BODY ---\n{normalized_body}")
+            content_lines.append(f"\n--- BODY ---\n{raw_body}")
 
         if attachments:
             content_lines.append("\n--- ATTACHMENTS ---")
@@ -286,6 +313,7 @@ def _format_message_output(
 
         return "\n".join(content_lines)
 
+    normalized_body = (body_data or "[No readable content found]").strip()
     content_lines = [
         f"Subject: {subject}",
         f"From: {sender}",

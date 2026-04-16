@@ -1,4 +1,8 @@
-from gmail.gmail_tools import _format_body_content
+from gmail.gmail_tools import (
+    HTML_RENDERED_BODY_TRUNCATE_LIMIT,
+    HTML_RENDERED_BODY_TRUNCATION_NOTICE,
+    _format_body_content,
+)
 
 
 def test_format_body_content_converts_html_to_readable_text_by_default():
@@ -45,3 +49,29 @@ def test_format_body_content_raw_keeps_original_html():
     result = _format_body_content("", html_body, output_format="raw")
 
     assert result == html_body
+
+
+def test_format_body_content_raw_keeps_original_plain_text():
+    text_body = "Line 1\n\n    indented\nline 3   \n"
+
+    result = _format_body_content(text_body, "", output_format="raw")
+
+    assert result == text_body
+
+
+def test_format_body_content_strips_hidden_preheader_with_unquoted_style():
+    html_body = "<div style=display:none>Hidden preheader text</div><p>Visible text</p>"
+
+    result = _format_body_content("", html_body)
+
+    assert "Hidden preheader text" not in result
+    assert "Visible text" in result
+
+
+def test_format_body_content_truncates_large_rendered_html_output():
+    html_body = "<p>Hello world.</p>" * 5000
+
+    result = _format_body_content("", html_body)
+
+    assert result.endswith(HTML_RENDERED_BODY_TRUNCATION_NOTICE)
+    assert len(result) <= HTML_RENDERED_BODY_TRUNCATE_LIMIT

@@ -43,6 +43,20 @@ def test_format_message_output_raw_preserves_legacy_sections():
     assert "## Quarterly Update" not in result
 
 
+def test_format_message_output_raw_preserves_body_whitespace():
+    body_data = "Line one\n\n    indented\nlast line   \n"
+
+    result = _format_message_output(
+        message_id="msg_123",
+        subject="Quarterly Update",
+        sender="Alex <alex@example.com>",
+        body_data=body_data,
+        output_format="raw",
+    )
+
+    assert f"--- BODY ---\n{body_data}" in result
+
+
 def test_format_thread_content_markdown_is_default_compact_layout():
     thread_data = {
         "messages": [
@@ -81,3 +95,27 @@ def test_format_thread_content_markdown_is_default_compact_layout():
     assert "Message ID: msg_1" in result
     assert "Subject: Re: Team Sync" in result
     assert "=== Message 1 ===" not in result
+
+
+def test_format_thread_content_raw_preserves_plain_text_body_whitespace():
+    thread_data = {
+        "messages": [
+            {
+                "id": "msg_1",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": "Team Sync"},
+                        {"name": "From", "value": "Alex <alex@example.com>"},
+                        {"name": "Date", "value": "Thu, 16 Apr 2026 10:00:00 -0700"},
+                    ],
+                    "mimeType": "text/plain",
+                    "body": {"data": "TGluZSAxCgoKICAgIGluZGVudGVkCmxhc3QgbGluZSAgIAo="},
+                },
+            }
+        ]
+    }
+
+    result = _format_thread_content(thread_data, "thread_123", output_format="raw")
+
+    assert "=== Message 1 ===" in result
+    assert "Line 1\n\n\n    indented\nlast line   \n" in result
