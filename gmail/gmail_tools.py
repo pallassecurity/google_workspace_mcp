@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 GMAIL_BATCH_SIZE = 25
 GMAIL_REQUEST_DELAY = 0.1
 HTML_RENDERED_BODY_TRUNCATE_LIMIT = 20000
-HTML_RENDERED_BODY_TRUNCATION_NOTICE = "\n\n[Message body truncated after HTML conversion...]"
+HTML_RENDERED_BODY_TRUNCATION_NOTICE = (
+    "\n\n[Message body truncated after HTML conversion...]"
+)
 
 
 def _extract_message_body(payload):

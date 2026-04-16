@@ -109,7 +109,9 @@ def test_format_thread_content_raw_preserves_plain_text_body_whitespace():
                         {"name": "Date", "value": "Thu, 16 Apr 2026 10:00:00 -0700"},
                     ],
                     "mimeType": "text/plain",
-                    "body": {"data": "TGluZSAxCgoKICAgIGluZGVudGVkCmxhc3QgbGluZSAgIAo="},
+                    "body": {
+                        "data": "TGluZSAxCgoKICAgIGluZGVudGVkCmxhc3QgbGluZSAgIAo="
+                    },
                 },
             }
         ]
