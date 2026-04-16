@@ -7,11 +7,14 @@ This module provides MCP tools for interacting with the Gmail API.
 import logging
 import asyncio
 import base64
+import re
 import ssl
 from typing import Optional, List, Dict, Literal, Any
 
 from email.mime.text import MIMEText
 
+import html2text
+from bs4 import BeautifulSoup, Comment
 from fastapi import Body
 from pydantic import Field
 
@@ -29,7 +32,164 @@ logger = logging.getLogger(__name__)
 
 GMAIL_BATCH_SIZE = 25
 GMAIL_REQUEST_DELAY = 0.1
-HTML_BODY_TRUNCATE_LIMIT = 20000
+HTML_RENDERED_BODY_TRUNCATE_LIMIT = 20000
+HTML_RENDERED_BODY_TRUNCATION_NOTICE = (
+    "\n\n[Message body truncated after HTML conversion...]"
+)
+_HTML_DROPPED_TAGS = {
+    "head",
+    "script",
+    "style",
+    "title",
+    "meta",
+    "link",
+    "svg",
+    "noscript",
+    "img",
+    "source",
+}
+_HIDDEN_STYLE_VALUES = {
+    "display": {"none"},
+    "visibility": {"hidden"},
+    "opacity": {"0", "0.0"},
+    "font-size": {"0", "0px", "0em", "0rem", "0%"},
+    "mso-hide": {"all"},
+}
+_VISIBLE_FALLBACK_BOUNDARY_RE = re.compile(
+    r"<(?:div|p|table|tbody|thead|tfoot|tr|td|section|article|main|header|footer|ul|ol|h[1-6])\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_style_value(style_value: str) -> str:
+    """
+    Normalize a CSS inline style value for exact matching.
+    """
+    normalized = style_value.strip().lower()
+    normalized = re.sub(r"\s*!important\s*$", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+
+def _attrs_fragment_hides_element(attrs_fragment: str) -> bool:
+    """
+    Check whether a raw HTML attribute fragment marks an element as hidden.
+    """
+    if re.search(r"(?:^|\s)hidden(?:\s|=|>|$)", attrs_fragment, flags=re.IGNORECASE):
+        return True
+
+    aria_hidden_match = re.search(
+        r'aria-hidden\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))',
+        attrs_fragment,
+        flags=re.IGNORECASE,
+    )
+    if aria_hidden_match:
+        aria_hidden_value = next(
+            group for group in aria_hidden_match.groups() if group is not None
+        )
+        if aria_hidden_value.strip().lower() == "true":
+            return True
+
+    style_match = re.search(
+        r'style\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))',
+        attrs_fragment,
+        flags=re.IGNORECASE,
+    )
+    if not style_match:
+        return False
+
+    style_value = next(group for group in style_match.groups() if group is not None)
+    styles = _parse_inline_style(style_value)
+    for property_name, hidden_values in _HIDDEN_STYLE_VALUES.items():
+        if styles.get(property_name) in hidden_values:
+            return True
+    return False
+
+
+def _parse_inline_style(style_value: Optional[str]) -> dict[str, str]:
+    """
+    Parse an inline style attribute into normalized property/value pairs.
+    """
+    if not style_value:
+        return {}
+
+    parsed_styles = {}
+    for declaration in style_value.split(";"):
+        if ":" not in declaration:
+            continue
+        property_name, property_value = declaration.split(":", 1)
+        parsed_styles[property_name.strip().lower()] = _normalize_style_value(
+            property_value
+        )
+    return parsed_styles
+
+
+def _tag_hides_element(tag) -> bool:
+    """
+    Check whether an HTML tag should be considered hidden.
+    """
+    if getattr(tag, "attrs", None) is None:
+        return False
+
+    if tag.has_attr("hidden"):
+        return True
+
+    if str(tag.get("aria-hidden", "")).strip().lower() == "true":
+        return True
+
+    styles = _parse_inline_style(tag.get("style"))
+    for property_name, hidden_values in _HIDDEN_STYLE_VALUES.items():
+        if styles.get(property_name) in hidden_values:
+            return True
+    return False
+
+
+def _clean_html_for_readable_text(html_body: str) -> str:
+    """
+    Strip hidden and non-content HTML using a DOM parser before rendering.
+    """
+    leading_hidden_match = re.match(
+        r"^\s*<(?P<tag>[a-z0-9]+)\b(?P<attrs>[^>]*)>",
+        html_body,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if leading_hidden_match and _attrs_fragment_hides_element(
+        leading_hidden_match.group("attrs")
+    ):
+        tag_name = leading_hidden_match.group("tag")
+        close_tag_matches = list(
+            re.finditer(rf"</{tag_name}\s*>", html_body, flags=re.IGNORECASE)
+        )
+        open_tag_count = len(
+            re.findall(rf"<{tag_name}\b", html_body, flags=re.IGNORECASE)
+        )
+        if open_tag_count > len(close_tag_matches):
+            boundary_start = (
+                close_tag_matches[-1].end()
+                if close_tag_matches
+                else leading_hidden_match.end()
+            )
+            boundary_match = _VISIBLE_FALLBACK_BOUNDARY_RE.search(
+                html_body, boundary_start
+            )
+            if boundary_match:
+                html_body = html_body[boundary_match.start() :]
+
+    soup = BeautifulSoup(html_body, "html5lib")
+
+    for comment in soup.find_all(string=lambda value: isinstance(value, Comment)):
+        comment.extract()
+
+    for tag_name in _HTML_DROPPED_TAGS:
+        for tag in soup.find_all(tag_name):
+            tag.decompose()
+
+    for tag in list(soup.find_all(True)):
+        if _tag_hides_element(tag):
+            tag.decompose()
+
+    body = soup.body or soup
+    return "".join(str(node) for node in body.contents)
 
 
 def _extract_message_body(payload):
@@ -100,28 +260,179 @@ def _extract_message_bodies(payload):
     return {"text": text_body, "html": html_body}
 
 
-def _format_body_content(text_body: str, html_body: str) -> str:
+def _normalize_body_text(content: str) -> str:
     """
-    Helper function to format message body content with HTML fallback and truncation.
+    Normalize body text while preserving readable structure.
+
+    Args:
+        content: Raw body text
+
+    Returns:
+        Cleaned text with normalized whitespace
+    """
+    if not content:
+        return ""
+
+    content = (
+        content.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\xa0", " ")
+        .replace("\u200b", "")
+    )
+    content = re.sub(r"[ \t]+\n", "\n", content)
+    content = re.sub(r"\n[ \t]+", "\n", content)
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    return content.strip()
+
+
+def _truncate_rendered_body_text(content: str) -> str:
+    """
+    Keep rendered body text within a manageable size for default responses.
+
+    Args:
+        content: Rendered body text
+
+    Returns:
+        Original text or a truncated version with a notice
+    """
+    if len(content) <= HTML_RENDERED_BODY_TRUNCATE_LIMIT:
+        return content
+
+    limit = HTML_RENDERED_BODY_TRUNCATE_LIMIT - len(
+        HTML_RENDERED_BODY_TRUNCATION_NOTICE
+    )
+    if limit <= 0:
+        return HTML_RENDERED_BODY_TRUNCATION_NOTICE.lstrip()
+
+    truncated = content[:limit].rstrip()
+    return truncated + HTML_RENDERED_BODY_TRUNCATION_NOTICE
+
+
+def _convert_html_to_readable_text(html_body: str) -> str:
+    """
+    Convert HTML email content to readable plain text / markdown-ish text.
+
+    Args:
+        html_body: Raw HTML body
+
+    Returns:
+        Readable text with non-content sections removed
+    """
+    if not html_body.strip():
+        return ""
+
+    cleaned_html = _clean_html_for_readable_text(html_body)
+
+    renderer = html2text.HTML2Text()
+    renderer.body_width = 0
+    renderer.ignore_links = True
+    renderer.ignore_images = True
+    renderer.ignore_emphasis = False
+    renderer.single_line_break = False
+
+    content = renderer.handle(cleaned_html)
+    # Match the existing lightweight bullet style.
+    content = re.sub(r"(?m)^\s*[*+]\s+", "- ", content)
+
+    return _truncate_rendered_body_text(_normalize_body_text(content))
+
+
+def _format_body_content(
+    text_body: str,
+    html_body: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
+) -> str:
+    """
+    Helper function to format message body content with HTML fallback.
 
     Args:
         text_body: Plain text body content
         html_body: HTML body content
+        output_format: Response rendering format
 
     Returns:
         Formatted body content string
     """
     if text_body.strip():
-        return text_body
+        if output_format == "raw":
+            return text_body
+        return _normalize_body_text(text_body)
     elif html_body.strip():
-        # Truncate very large HTML to keep responses manageable
-        if len(html_body) > HTML_BODY_TRUNCATE_LIMIT:
-            html_body = (
-                html_body[:HTML_BODY_TRUNCATE_LIMIT] + "\n\n[HTML content truncated...]"
-            )
-        return f"[HTML Content Converted]\n{html_body}"
+        if output_format == "raw":
+            return html_body
+        converted = _convert_html_to_readable_text(html_body)
+        return converted or "[No readable content found]"
     else:
         return "[No readable content found]"
+
+
+def _format_message_output(
+    message_id: str,
+    subject: str,
+    sender: str,
+    body_data: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
+    output_format: Literal["markdown", "raw"] = "markdown",
+) -> str:
+    """
+    Format a single message in either compact Markdown or legacy raw text.
+
+    Args:
+        message_id: Gmail message ID
+        subject: Message subject
+        sender: Message sender
+        body_data: Optional message body content
+        attachments: Optional attachment metadata
+        output_format: Rendering format for the response
+
+    Returns:
+        Formatted message content
+    """
+    web_link = _generate_gmail_web_url(message_id)
+    attachments = attachments or []
+
+    if output_format == "raw":
+        raw_body = body_data if body_data is not None else "[No readable content found]"
+        content_lines = [
+            f"Subject: {subject}",
+            f"From:    {sender}",
+            f"Message ID: {message_id}",
+            f"Web Link: {web_link}",
+        ]
+
+        if body_data is not None:
+            content_lines.append(f"\n--- BODY ---\n{raw_body}")
+
+        if attachments:
+            content_lines.append("\n--- ATTACHMENTS ---")
+            for i, att in enumerate(attachments, 1):
+                size_kb = att["size"] / 1024
+                content_lines.append(
+                    f"{i}. {att['filename']} ({att['mimeType']}, {size_kb:.1f} KB)\n"
+                    f"   Attachment ID: {att['attachmentId']}\n"
+                    f"   Use get_gmail_attachment_content(message_id='{message_id}', attachment_id='{att['attachmentId']}') to download"
+                )
+
+        return "\n".join(content_lines)
+
+    normalized_body = (body_data or "[No readable content found]").strip()
+    content_lines = [
+        f"Subject: {subject}",
+        f"From: {sender}",
+        f"Message ID: {message_id}",
+    ]
+
+    if body_data is not None:
+        content_lines.extend(["", normalized_body])
+
+    if attachments:
+        content_lines.extend(["", "Attachments:"])
+        for att in attachments:
+            content_lines.append(
+                f"- {att['filename']} (Attachment ID: {att['attachmentId']})"
+            )
+
+    return "\n".join(content_lines)
 
 
 def _extract_attachments(payload: dict) -> List[Dict[str, Any]]:
@@ -376,17 +687,22 @@ async def search_gmail_messages(
 )
 @require_google_service("gmail", "gmail_read")
 async def get_gmail_message_content(
-    service, message_id: str, user_google_email: str
+    service,
+    message_id: str,
+    user_google_email: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
 ) -> str:
     """
-    Retrieves the full content (subject, sender, plain text body) of a specific Gmail message.
+    Retrieves the full content of a specific Gmail message.
 
     Args:
         message_id (str): The unique ID of the Gmail message to retrieve.
         user_google_email (str): The user's Google email address. Required.
+        output_format (Literal["markdown", "raw"]): Response rendering format.
+            Defaults to compact Markdown, which keeps all the content except the format. ONLY use raw when absolutely necessary to see the entire content, which normally consume large amount of context window.
 
     Returns:
-        str: The message details including subject, sender, and body content.
+        str: The message details including subject, sender, body content, and attachments.
     """
     logger.info(
         f"[get_gmail_message_content] Invoked. Message ID: '{message_id}', Email: '{user_google_email}'"
@@ -433,29 +749,19 @@ async def get_gmail_message_content(
     html_body = bodies.get("html", "")
 
     # Format body content with HTML fallback
-    body_data = _format_body_content(text_body, html_body)
+    body_data = _format_body_content(text_body, html_body, output_format)
 
     # Extract attachment metadata
     attachments = _extract_attachments(payload)
 
-    content_lines = [
-        f"Subject: {subject}",
-        f"From:    {sender}",
-        f"\n--- BODY ---\n{body_data or '[No text/plain body found]'}",
-    ]
-
-    # Add attachment information if present
-    if attachments:
-        content_lines.append("\n--- ATTACHMENTS ---")
-        for i, att in enumerate(attachments, 1):
-            size_kb = att["size"] / 1024
-            content_lines.append(
-                f"{i}. {att['filename']} ({att['mimeType']}, {size_kb:.1f} KB)\n"
-                f"   Attachment ID: {att['attachmentId']}\n"
-                f"   Use get_gmail_attachment_content(message_id='{message_id}', attachment_id='{att['attachmentId']}') to download"
-            )
-
-    return "\n".join(content_lines)
+    return _format_message_output(
+        message_id=message_id,
+        subject=subject,
+        sender=sender,
+        body_data=body_data,
+        attachments=attachments,
+        output_format=output_format,
+    )
 
 
 @server.tool()
@@ -468,6 +774,7 @@ async def get_gmail_messages_content_batch(
     message_ids: List[str],
     user_google_email: str,
     format: Literal["full", "metadata"] = "full",
+    output_format: Literal["markdown", "raw"] = "markdown",
 ) -> str:
     """
     Retrieves the content of multiple Gmail messages in a single batch request.
@@ -477,6 +784,8 @@ async def get_gmail_messages_content_batch(
         message_ids (List[str]): List of Gmail message IDs to retrieve (max 25 per batch).
         user_google_email (str): The user's Google email address. Required.
         format (Literal["full", "metadata"]): Message format. "full" includes body, "metadata" only headers.
+        output_format (Literal["markdown", "raw"]): Response rendering format.
+            Defaults to compact Markdown, which keeps all the content except the format. ONLY use raw when absolutely necessary to see the entire content, which normally consume large amount of context window.
 
     Returns:
         str: A formatted list of message contents with separators.
@@ -600,10 +909,14 @@ async def get_gmail_messages_content_batch(
                     sender = headers.get("From", "(unknown sender)")
 
                     output_messages.append(
-                        f"Message ID: {mid}\n"
-                        f"Subject: {subject}\n"
-                        f"From: {sender}\n"
-                        f"Web Link: {_generate_gmail_web_url(mid)}\n"
+                        _format_message_output(
+                            message_id=mid,
+                            subject=subject,
+                            sender=sender,
+                            body_data=None,
+                            attachments=None,
+                            output_format=output_format,
+                        )
                     )
                 else:
                     # Full format - extract body too
@@ -617,19 +930,29 @@ async def get_gmail_messages_content_batch(
                     html_body = bodies.get("html", "")
 
                     # Format body content with HTML fallback
-                    body_data = _format_body_content(text_body, html_body)
+                    body_data = _format_body_content(
+                        text_body, html_body, output_format
+                    )
+                    attachments = _extract_attachments(payload)
 
                     output_messages.append(
-                        f"Message ID: {mid}\n"
-                        f"Subject: {subject}\n"
-                        f"From: {sender}\n"
-                        f"Web Link: {_generate_gmail_web_url(mid)}\n"
-                        f"\n{body_data}\n"
+                        _format_message_output(
+                            message_id=mid,
+                            subject=subject,
+                            sender=sender,
+                            body_data=body_data,
+                            attachments=attachments,
+                            output_format=output_format,
+                        )
                     )
 
     # Combine all messages with separators
-    final_output = f"Retrieved {len(message_ids)} messages:\n\n"
-    final_output += "\n---\n\n".join(output_messages)
+    if output_format == "raw":
+        final_output = f"Retrieved {len(message_ids)} messages:\n\n"
+        final_output += "\n---\n\n".join(output_messages)
+    else:
+        final_output = f"# Messages ({len(message_ids)})\n\n"
+        final_output += "\n\n".join(output_messages)
 
     return final_output
 
@@ -932,7 +1255,11 @@ async def draft_gmail_message(
     return f"Draft created! Draft ID: {draft_id}"
 
 
-def _format_thread_content(thread_data: dict, thread_id: str) -> str:
+def _format_thread_content(
+    thread_data: dict,
+    thread_id: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
+) -> str:
     """
     Helper function to format thread content from Gmail API response.
 
@@ -955,13 +1282,20 @@ def _format_thread_content(thread_data: dict, thread_id: str) -> str:
     }
     thread_subject = first_headers.get("Subject", "(no subject)")
 
-    # Build the thread content
-    content_lines = [
-        f"Thread ID: {thread_id}",
-        f"Subject: {thread_subject}",
-        f"Messages: {len(messages)}",
-        "",
-    ]
+    if output_format == "raw":
+        content_lines = [
+            f"Thread ID: {thread_id}",
+            f"Subject: {thread_subject}",
+            f"Messages: {len(messages)}",
+            "",
+        ]
+    else:
+        content_lines = [
+            f"Subject: {thread_subject}",
+            f"Thread ID: {thread_id}",
+            f"Messages: {len(messages)}",
+            "",
+        ]
 
     # Process each message in the thread
     for i, message in enumerate(messages, 1):
@@ -973,6 +1307,7 @@ def _format_thread_content(thread_data: dict, thread_id: str) -> str:
         sender = headers.get("From", "(unknown sender)")
         date = headers.get("Date", "(unknown date)")
         subject = headers.get("Subject", "(no subject)")
+        message_id = message.get("id", "(unknown message id)")
 
         # Extract both text and HTML bodies
         payload = message.get("payload", {})
@@ -981,28 +1316,36 @@ def _format_thread_content(thread_data: dict, thread_id: str) -> str:
         html_body = bodies.get("html", "")
 
         # Format body content with HTML fallback
-        body_data = _format_body_content(text_body, html_body)
+        body_data = _format_body_content(text_body, html_body, output_format)
 
-        # Add message to content
-        content_lines.extend(
-            [
-                f"=== Message {i} ===",
-                f"From: {sender}",
-                f"Date: {date}",
-            ]
-        )
+        if output_format == "raw":
+            content_lines.extend(
+                [
+                    f"=== Message {i} ===",
+                    f"From: {sender}",
+                    f"Date: {date}",
+                    f"Message ID: {message_id}",
+                ]
+            )
 
-        # Only show subject if it's different from thread subject
-        if subject != thread_subject:
-            content_lines.append(f"Subject: {subject}")
+            if subject != thread_subject:
+                content_lines.append(f"Subject: {subject}")
 
-        content_lines.extend(
-            [
-                "",
-                body_data,
-                "",
-            ]
-        )
+            content_lines.extend(["", body_data, ""])
+        else:
+            content_lines.extend(
+                [
+                    f"Message {i}",
+                    f"Message ID: {message_id}",
+                    f"From: {sender}",
+                    f"Date: {date}",
+                ]
+            )
+
+            if subject != thread_subject:
+                content_lines.append(f"Subject: {subject}")
+
+            content_lines.extend(["", body_data, ""])
 
     return "\n".join(content_lines)
 
@@ -1011,7 +1354,10 @@ def _format_thread_content(thread_data: dict, thread_id: str) -> str:
 @require_google_service("gmail", "gmail_read")
 @handle_http_errors("get_gmail_thread_content", is_read_only=True, service_type="gmail")
 async def get_gmail_thread_content(
-    service, thread_id: str, user_google_email: str
+    service,
+    thread_id: str,
+    user_google_email: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
 ) -> str:
     """
     Retrieves the complete content of a Gmail conversation thread, including all messages.
@@ -1019,6 +1365,8 @@ async def get_gmail_thread_content(
     Args:
         thread_id (str): The unique ID of the Gmail thread to retrieve.
         user_google_email (str): The user's Google email address. Required.
+        output_format (Literal["markdown", "raw"]): Response rendering format.
+            Defaults to compact Markdown, which keeps all the content except the format. ONLY use raw when absolutely necessary to see the entire content, which normally consume large amount of context window.
 
     Returns:
         str: The complete thread content with all messages formatted for reading.
@@ -1032,7 +1380,7 @@ async def get_gmail_thread_content(
         service.users().threads().get(userId="me", id=thread_id, format="full").execute
     )
 
-    return _format_thread_content(thread_response, thread_id)
+    return _format_thread_content(thread_response, thread_id, output_format)
 
 
 @server.tool()
@@ -1044,6 +1392,7 @@ async def get_gmail_threads_content_batch(
     service,
     thread_ids: List[str],
     user_google_email: str,
+    output_format: Literal["markdown", "raw"] = "markdown",
 ) -> str:
     """
     Retrieves the content of multiple Gmail threads in a single batch request.
@@ -1052,6 +1401,8 @@ async def get_gmail_threads_content_batch(
     Args:
         thread_ids (List[str]): A list of Gmail thread IDs to retrieve. The function will automatically batch requests in chunks of 25.
         user_google_email (str): The user's Google email address. Required.
+        output_format (Literal["markdown", "raw"]): Response rendering format.
+            Defaults to compact Markdown, which keeps all the content except the format. ONLY use raw when absolutely necessary to see the entire content, which normally consume large amount of context window.
 
     Returns:
         str: A formatted list of thread contents with separators.
@@ -1137,11 +1488,17 @@ async def get_gmail_threads_content_batch(
                     output_threads.append(f"⚠️ Thread {tid}: No data returned\n")
                     continue
 
-                output_threads.append(_format_thread_content(thread, tid))
+                output_threads.append(
+                    _format_thread_content(thread, tid, output_format)
+                )
 
     # Combine all threads with separators
-    header = f"Retrieved {len(thread_ids)} threads:"
-    return header + "\n\n" + "\n---\n\n".join(output_threads)
+    if output_format == "raw":
+        header = f"Retrieved {len(thread_ids)} threads:"
+        return header + "\n\n" + "\n---\n\n".join(output_threads)
+
+    header = f"# Threads ({len(thread_ids)})"
+    return header + "\n\n" + "\n\n".join(output_threads)
 
 
 @server.tool()
