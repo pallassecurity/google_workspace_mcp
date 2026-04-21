@@ -6,15 +6,15 @@ This module provides MCP tools for interacting with Google Drive API.
 
 import logging
 import asyncio
+import base64
+import binascii
+import os
 from typing import Optional
-from tempfile import NamedTemporaryFile
 
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
-import httpx
 
 from auth.service_decorator import require_google_service
-from auth.oauth_config import is_stateless_mode
 from core.file_text_extractors import extract_pdf_text
 from core.utils import extract_office_xml_text, handle_http_errors
 from core.server import server
@@ -22,8 +22,51 @@ from gdrive.drive_helpers import DRIVE_QUERY_PATTERNS, build_drive_list_params
 
 logger = logging.getLogger(__name__)
 
-DOWNLOAD_CHUNK_SIZE_BYTES = 256 * 1024  # 256 KB
 UPLOAD_CHUNK_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB (Google recommended minimum)
+DEFAULT_BINARY_UPLOAD_MAX_BYTES = 100 * 1024 * 1024  # 100 MiB
+BINARY_UPLOAD_MAX_BYTES_ENV = "WORKSPACE_MCP_BINARY_UPLOAD_MAX_BYTES"
+
+
+def _get_binary_upload_max_bytes() -> int:
+    """
+    Read the binary upload size limit from environment with safe fallback.
+    """
+    raw_limit = os.getenv(BINARY_UPLOAD_MAX_BYTES_ENV)
+    if not raw_limit:
+        return DEFAULT_BINARY_UPLOAD_MAX_BYTES
+
+    try:
+        parsed_limit = int(raw_limit)
+        if parsed_limit <= 0:
+            raise ValueError
+        return parsed_limit
+    except ValueError:
+        logger.warning(
+            "[create_drive_file] Invalid %s=%r. Falling back to default %d bytes.",
+            BINARY_UPLOAD_MAX_BYTES_ENV,
+            raw_limit,
+            DEFAULT_BINARY_UPLOAD_MAX_BYTES,
+        )
+        return DEFAULT_BINARY_UPLOAD_MAX_BYTES
+
+
+def _decode_base64_content(content_base64: str) -> bytes:
+    """
+    Decode a base64 string (standard or URL-safe), preserving exact bytes.
+    """
+    normalized_content = content_base64.strip()
+    if not normalized_content:
+        raise Exception("'content_base64' cannot be empty.")
+
+    # Accept both standard and URL-safe base64 by normalizing URL-safe chars.
+    normalized_content = normalized_content.replace("-", "+").replace("_", "/")
+    padded_content = normalized_content + "=" * (-len(normalized_content) % 4)
+    try:
+        return base64.b64decode(padded_content, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise Exception(
+            "Invalid 'content_base64'. Provide a valid base64-encoded payload."
+        ) from exc
 
 
 @server.tool()
@@ -271,143 +314,65 @@ async def create_drive_file(
     service,
     user_google_email: str,
     file_name: str,
-    content: Optional[str] = None,  # Now explicitly Optional
+    content: Optional[str] = None,
+    content_base64: Optional[str] = None,
     folder_id: str = "root",
     mime_type: str = "text/plain",
-    fileUrl: Optional[str] = None,  # Now explicitly Optional
 ) -> str:
     """
     Creates a new file in Google Drive, supporting creation within shared drives.
-    Accepts either direct content or a fileUrl to fetch the content from.
+    Binary uploads are limited by WORKSPACE_MCP_BINARY_UPLOAD_MAX_BYTES
+    (default: 104857600 bytes / 100 MiB).
 
     Args:
         user_google_email (str): The user's Google email address. Required.
         file_name (str): The name for the new file.
-        content (Optional[str]): If provided, the content to write to the file.
+        content (Optional[str]): UTF-8 text content to write to the file.
+        content_base64 (Optional[str]): Base64-encoded binary content to upload.
         folder_id (str): The ID of the parent folder. Defaults to 'root'. For shared drives, this must be a folder ID within the shared drive.
         mime_type (str): The MIME type of the file. Defaults to 'text/plain'.
-        fileUrl (Optional[str]): If provided, fetches the file content from this URL.
 
     Returns:
         str: Confirmation message of the successful file creation with file link.
     """
     logger.info(
-        f"[create_drive_file] Invoked. Email: '{user_google_email}', File Name: {file_name}, Folder ID: {folder_id}, fileUrl: {fileUrl}"
+        f"[create_drive_file] Invoked. Email: '{user_google_email}', File Name: {file_name}, Folder ID: {folder_id}"
     )
 
-    if not content and not fileUrl:
-        raise Exception("You must provide either 'content' or 'fileUrl'.")
+    mode_count = int(content is not None) + int(content_base64 is not None)
+    if mode_count != 1:
+        raise Exception(
+            "Provide exactly one input mode: either 'content' or 'content_base64'."
+        )
 
-    file_data = None
+    if content_base64 is not None:
+        file_data = _decode_base64_content(content_base64)
+    else:
+        file_data = content.encode("utf-8") if content is not None else b""
+
+    max_bytes = _get_binary_upload_max_bytes()
+    if len(file_data) > max_bytes:
+        raise Exception(
+            f"File payload too large: {len(file_data)} bytes exceeds limit of {max_bytes} bytes."
+        )
 
     file_metadata = {"name": file_name, "parents": [folder_id], "mimeType": mime_type}
-
-    # Prefer fileUrl if both are provided
-    if fileUrl:
-        logger.info(f"[create_drive_file] Fetching file from URL: {fileUrl}")
-        # when running in stateless mode, deployment may not have access to local file system
-        if is_stateless_mode():
-            async with httpx.AsyncClient(follow_redirects=True) as client:
-                resp = await client.get(fileUrl)
-                if resp.status_code != 200:
-                    raise Exception(
-                        f"Failed to fetch file from URL: {fileUrl} (status {resp.status_code})"
-                    )
-                file_data = await resp.aread()
-                # Try to get MIME type from Content-Type header
-                content_type = resp.headers.get("Content-Type")
-                if content_type and content_type != "application/octet-stream":
-                    mime_type = content_type
-                    file_metadata["mimeType"] = content_type
-                    logger.info(
-                        f"[create_drive_file] Using MIME type from Content-Type header: {content_type}"
-                    )
-
-            media = MediaIoBaseUpload(
-                io.BytesIO(file_data),
+    media = io.BytesIO(file_data)
+    created_file = await asyncio.to_thread(
+        service.files()
+        .create(
+            body=file_metadata,
+            media_body=MediaIoBaseUpload(
+                media,
                 mimetype=mime_type,
                 resumable=True,
                 chunksize=UPLOAD_CHUNK_SIZE_BYTES,
-            )
-
-            created_file = await asyncio.to_thread(
-                service.files()
-                .create(
-                    body=file_metadata,
-                    media_body=media,
-                    fields="id, name, webViewLink",
-                    supportsAllDrives=True,
-                )
-                .execute
-            )
-        else:
-            # Use NamedTemporaryFile to stream download and upload
-            with NamedTemporaryFile() as temp_file:
-                total_bytes = 0
-                # follow redirects
-                async with httpx.AsyncClient(follow_redirects=True) as client:
-                    async with client.stream("GET", fileUrl) as resp:
-                        if resp.status_code != 200:
-                            raise Exception(
-                                f"Failed to fetch file from URL: {fileUrl} (status {resp.status_code})"
-                            )
-
-                        # Stream download in chunks
-                        async for chunk in resp.aiter_bytes(
-                            chunk_size=DOWNLOAD_CHUNK_SIZE_BYTES
-                        ):
-                            await asyncio.to_thread(temp_file.write, chunk)
-                            total_bytes += len(chunk)
-
-                        logger.info(
-                            f"[create_drive_file] Downloaded {total_bytes} bytes from URL before upload."
-                        )
-
-                        # Try to get MIME type from Content-Type header
-                        content_type = resp.headers.get("Content-Type")
-                        if content_type and content_type != "application/octet-stream":
-                            mime_type = content_type
-                            file_metadata["mimeType"] = mime_type
-                            logger.info(
-                                f"[create_drive_file] Using MIME type from Content-Type header: {mime_type}"
-                            )
-
-                # Reset file pointer to beginning for upload
-                temp_file.seek(0)
-
-                # Upload with chunking
-                media = MediaIoBaseUpload(
-                    temp_file,
-                    mimetype=mime_type,
-                    resumable=True,
-                    chunksize=UPLOAD_CHUNK_SIZE_BYTES,
-                )
-
-                logger.info("[create_drive_file] Starting upload to Google Drive...")
-                created_file = await asyncio.to_thread(
-                    service.files()
-                    .create(
-                        body=file_metadata,
-                        media_body=media,
-                        fields="id, name, webViewLink",
-                        supportsAllDrives=True,
-                    )
-                    .execute
-                )
-    elif content:
-        file_data = content.encode("utf-8")
-        media = io.BytesIO(file_data)
-
-        created_file = await asyncio.to_thread(
-            service.files()
-            .create(
-                body=file_metadata,
-                media_body=MediaIoBaseUpload(media, mimetype=mime_type, resumable=True),
-                fields="id, name, webViewLink",
-                supportsAllDrives=True,
-            )
-            .execute
+            ),
+            fields="id, name, webViewLink",
+            supportsAllDrives=True,
         )
+        .execute
+    )
 
     link = created_file.get("webViewLink", "No link available")
     confirmation_message = f"Successfully created file '{created_file.get('name', file_name)}' (ID: {created_file.get('id', 'N/A')}) in folder '{folder_id}' for {user_google_email}. Link: {link}"

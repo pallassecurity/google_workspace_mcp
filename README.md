@@ -699,7 +699,7 @@ cp .env.oauth21 .env
 | `search_drive_files` | **Core** | Search files with query syntax |
 | `get_drive_file_content` | **Core** | Read file content (Office formats) |
 | `list_drive_items` | Extended | List folder contents |
-| `create_drive_file` | **Core** | Create files or fetch from URLs |
+| `create_drive_file` | **Core** | Create files from text or base64 binary content |
 
 </td>
 </tr>
@@ -715,7 +715,7 @@ cp .env.oauth21 .env
 | `search_gmail_messages` | **Core** | Search with Gmail operators |
 | `get_gmail_message_content` | **Core** | Retrieve message content |
 | `get_gmail_messages_content_batch` | **Core** | Batch retrieve message content |
-| `send_gmail_message` | **Core** | Send emails |
+| `send_gmail_message` | **Core** | Send emails with optional attachments |
 | `get_gmail_thread_content` | Extended | Get full thread content |
 | `modify_gmail_message_labels` | Extended | Modify message labels |
 | `list_gmail_labels` | Extended | List available labels |

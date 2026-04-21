@@ -7,10 +7,14 @@ This module provides MCP tools for interacting with the Gmail API.
 import logging
 import asyncio
 import base64
+import binascii
 import re
 import ssl
 from typing import Optional, List, Dict, Literal, Any
 
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import html2text
@@ -32,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 GMAIL_BATCH_SIZE = 25
 GMAIL_REQUEST_DELAY = 0.1
+GMAIL_MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024  # 25 MiB
 HTML_RENDERED_BODY_TRUNCATE_LIMIT = 20000
 HTML_RENDERED_BODY_TRUNCATION_NOTICE = (
     "\n\n[Message body truncated after HTML conversion...]"
@@ -499,6 +504,7 @@ def _prepare_gmail_message(
     references: Optional[str] = None,
     body_format: Literal["plain", "html"] = "plain",
     from_email: Optional[str] = None,
+    attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> tuple[str, Optional[str]]:
     """
     Prepare a Gmail message with threading support.
@@ -514,6 +520,8 @@ def _prepare_gmail_message(
         references: Optional chain of Message-IDs for proper threading
         body_format: Content type for the email body ('plain' or 'html')
         from_email: Optional sender email address
+        attachments: Optional list of attachments with filename, content_base64,
+            and optional mime_type.
 
     Returns:
         Tuple of (raw_message, thread_id) where raw_message is base64 encoded
@@ -528,7 +536,11 @@ def _prepare_gmail_message(
     if normalized_format not in {"plain", "html"}:
         raise ValueError("body_format must be either 'plain' or 'html'.")
 
-    message = MIMEText(body, normalized_format)
+    message = _build_gmail_mime_message(
+        body=body,
+        body_format=normalized_format,
+        attachments=attachments,
+    )
     message["Subject"] = reply_subject
 
     # Add sender if provided
@@ -554,6 +566,75 @@ def _prepare_gmail_message(
     raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
 
     return raw_message, thread_id
+
+
+def _decode_base64_attachment(content_base64: str) -> bytes:
+    """
+    Decode base64 attachment data (supports URL-safe form).
+    """
+    normalized_content = content_base64.strip()
+    if not normalized_content:
+        raise ValueError("Attachment 'content_base64' cannot be empty.")
+
+    normalized_content = normalized_content.replace("-", "+").replace("_", "/")
+    padded_content = normalized_content + "=" * (-len(normalized_content) % 4)
+    try:
+        return base64.b64decode(padded_content, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Attachment 'content_base64' is not valid base64.") from exc
+
+
+def _build_gmail_mime_message(
+    body: str,
+    body_format: Literal["plain", "html"],
+    attachments: Optional[List[Dict[str, Any]]] = None,
+):
+    """
+    Build MIME payload for Gmail sends, with optional attachments.
+    """
+    if not attachments:
+        return MIMEText(body, body_format)
+
+    message = MIMEMultipart()
+    message.attach(MIMEText(body, body_format))
+
+    total_attachment_bytes = 0
+    for index, attachment in enumerate(attachments, start=1):
+        if not isinstance(attachment, dict):
+            raise ValueError(
+                f"Attachment #{index} must be an object with attachment metadata."
+            )
+
+        filename = str(attachment.get("filename", "")).strip()
+        if not filename:
+            raise ValueError(f"Attachment #{index} is missing required 'filename'.")
+
+        content_base64 = attachment.get("content_base64")
+        if not isinstance(content_base64, str):
+            raise ValueError(
+                f"Attachment '{filename}' is missing required 'content_base64'."
+            )
+        attachment_bytes = _decode_base64_attachment(content_base64)
+        total_attachment_bytes += len(attachment_bytes)
+
+        if total_attachment_bytes > GMAIL_MAX_ATTACHMENT_TOTAL_BYTES:
+            raise ValueError(
+                f"Total attachment payload exceeds {GMAIL_MAX_ATTACHMENT_TOTAL_BYTES} bytes (25 MiB)."
+            )
+
+        mime_type = str(attachment.get("mime_type", "application/octet-stream")).strip()
+        if "/" in mime_type:
+            maintype, subtype = mime_type.split("/", 1)
+        else:
+            maintype, subtype = "application", "octet-stream"
+
+        part = MIMEBase(maintype, subtype)
+        part.set_payload(attachment_bytes)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=filename)
+        message.attach(part)
+
+    return message
 
 
 def _generate_gmail_web_url(item_id: str, account_index: int = 0) -> str:
@@ -1053,6 +1134,14 @@ async def send_gmail_message(
     references: Optional[str] = Body(
         None, description="Optional chain of Message-IDs for proper threading."
     ),
+    attachments: Optional[List[Dict[str, Any]]] = Body(
+        None,
+        description=(
+            "Optional attachments. Each item must include 'filename' and "
+            "'content_base64', and may include 'mime_type'. "
+            "Total attachment payload limit is 25 MiB."
+        ),
+    ),
 ) -> str:
     """
     Sends an email using the user's Gmail account. Supports both new emails and replies.
@@ -1068,6 +1157,10 @@ async def send_gmail_message(
         thread_id (Optional[str]): Optional Gmail thread ID to reply within. When provided, sends a reply.
         in_reply_to (Optional[str]): Optional Message-ID of the message being replied to. Used for proper threading.
         references (Optional[str]): Optional chain of Message-IDs for proper threading. Should include all previous Message-IDs.
+        attachments (Optional[List[Dict[str, Any]]]): Optional attachment list. Each item must include:
+            - filename (str)
+            - content_base64 (str)
+            - mime_type (str, optional; defaults to application/octet-stream)
 
     Returns:
         str: Confirmation message with the sent email's message ID.
@@ -1102,6 +1195,20 @@ async def send_gmail_message(
             in_reply_to="<message123@gmail.com>",
             references="<original@gmail.com> <message123@gmail.com>"
         )
+
+        # Send with an attachment
+        send_gmail_message(
+            to="user@example.com",
+            subject="Archive",
+            body="Please see attached ZIP.",
+            attachments=[
+                {
+                    "filename": "files.zip",
+                    "content_base64": "UEsDB...",
+                    "mime_type": "application/zip"
+                }
+            ]
+        )
     """
     logger.info(
         f"[send_gmail_message] Invoked. Email: '{user_google_email}', Subject: '{subject}'"
@@ -1119,6 +1226,7 @@ async def send_gmail_message(
         references=references,
         body_format=body_format,
         from_email=user_google_email,
+        attachments=attachments,
     )
 
     send_body = {"raw": raw_message}
