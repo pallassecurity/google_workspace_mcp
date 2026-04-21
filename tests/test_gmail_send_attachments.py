@@ -115,3 +115,42 @@ def test_prepare_gmail_message_rejects_attachment_payload_over_limit(monkeypatch
                 }
             ],
         )
+
+
+def test_prepare_gmail_message_precheck_rejects_large_base64_before_decode(monkeypatch):
+    monkeypatch.setattr(gmail_tools, "GMAIL_MAX_ATTACHMENT_TOTAL_BYTES", 4)
+
+    with pytest.raises(ValueError, match="exceeds"):
+        gmail_tools._prepare_gmail_message(
+            subject="Too large precheck",
+            body="Body",
+            to="user@example.com",
+            attachments=[
+                {
+                    "filename": "big.bin",
+                    "content_base64": "A" * 100,
+                    "mime_type": "application/octet-stream",
+                }
+            ],
+        )
+
+
+def test_prepare_gmail_message_defaults_invalid_slash_mime_type():
+    payload = base64.b64encode(b"abc").decode("ascii")
+
+    raw_message, _ = gmail_tools._prepare_gmail_message(
+        subject="Mime test",
+        body="Body",
+        to="user@example.com",
+        attachments=[
+            {
+                "filename": "file.bin",
+                "content_base64": payload,
+                "mime_type": "/",
+            }
+        ],
+    )
+
+    parsed = _decode_raw_message(raw_message)
+    attachment_part = next(parsed.iter_attachments())
+    assert attachment_part.get_content_type() == "application/octet-stream"

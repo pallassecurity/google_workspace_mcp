@@ -7,7 +7,6 @@ This module provides MCP tools for interacting with the Gmail API.
 import logging
 import asyncio
 import base64
-import binascii
 import re
 import ssl
 from typing import Optional, List, Dict, Literal, Any
@@ -23,6 +22,10 @@ from fastapi import Body
 from pydantic import Field
 
 from auth.service_decorator import require_google_service
+from core.base64_utils import (
+    decode_base64_payload,
+    estimate_base64_decoded_size_upper_bound,
+)
 from core.utils import handle_http_errors
 from core.server import server
 from auth.scopes import (
@@ -575,12 +578,9 @@ def _decode_base64_attachment(content_base64: str) -> bytes:
     normalized_content = content_base64.strip()
     if not normalized_content:
         raise ValueError("Attachment 'content_base64' cannot be empty.")
-
-    normalized_content = normalized_content.replace("-", "+").replace("_", "/")
-    padded_content = normalized_content + "=" * (-len(normalized_content) % 4)
     try:
-        return base64.b64decode(padded_content, validate=True)
-    except (binascii.Error, ValueError) as exc:
+        return decode_base64_payload(content_base64)
+    except ValueError as exc:
         raise ValueError("Attachment 'content_base64' is not valid base64.") from exc
 
 
@@ -614,6 +614,12 @@ def _build_gmail_mime_message(
             raise ValueError(
                 f"Attachment '{filename}' is missing required 'content_base64'."
             )
+        remaining_budget = GMAIL_MAX_ATTACHMENT_TOTAL_BYTES - total_attachment_bytes
+        estimated_size = estimate_base64_decoded_size_upper_bound(content_base64)
+        if estimated_size > remaining_budget:
+            raise ValueError(
+                f"Total attachment payload exceeds {GMAIL_MAX_ATTACHMENT_TOTAL_BYTES} bytes (25 MiB)."
+            )
         attachment_bytes = _decode_base64_attachment(content_base64)
         total_attachment_bytes += len(attachment_bytes)
 
@@ -625,6 +631,8 @@ def _build_gmail_mime_message(
         mime_type = str(attachment.get("mime_type", "application/octet-stream")).strip()
         if "/" in mime_type:
             maintype, subtype = mime_type.split("/", 1)
+            if not maintype or not subtype:
+                maintype, subtype = "application", "octet-stream"
         else:
             maintype, subtype = "application", "octet-stream"
 

@@ -6,8 +6,6 @@ This module provides MCP tools for interacting with Google Drive API.
 
 import logging
 import asyncio
-import base64
-import binascii
 import os
 from typing import Optional
 
@@ -15,6 +13,10 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 import io
 
 from auth.service_decorator import require_google_service
+from core.base64_utils import (
+    decode_base64_payload,
+    estimate_base64_decoded_size_upper_bound,
+)
 from core.file_text_extractors import extract_pdf_text
 from core.utils import extract_office_xml_text, handle_http_errors
 from core.server import server
@@ -54,16 +56,11 @@ def _decode_base64_content(content_base64: str) -> bytes:
     """
     Decode a base64 string (standard or URL-safe), preserving exact bytes.
     """
-    normalized_content = content_base64.strip()
-    if not normalized_content:
+    if not content_base64.strip():
         raise Exception("'content_base64' cannot be empty.")
-
-    # Accept both standard and URL-safe base64 by normalizing URL-safe chars.
-    normalized_content = normalized_content.replace("-", "+").replace("_", "/")
-    padded_content = normalized_content + "=" * (-len(normalized_content) % 4)
     try:
-        return base64.b64decode(padded_content, validate=True)
-    except (binascii.Error, ValueError) as exc:
+        return decode_base64_payload(content_base64)
+    except ValueError as exc:
         raise Exception(
             "Invalid 'content_base64'. Provide a valid base64-encoded payload."
         ) from exc
@@ -316,6 +313,7 @@ async def create_drive_file(
     file_name: str,
     content: Optional[str] = None,
     content_base64: Optional[str] = None,
+    fileUrl: Optional[str] = None,
     folder_id: str = "root",
     mime_type: str = "text/plain",
 ) -> str:
@@ -329,6 +327,7 @@ async def create_drive_file(
         file_name (str): The name for the new file.
         content (Optional[str]): UTF-8 text content to write to the file.
         content_base64 (Optional[str]): Base64-encoded binary content to upload.
+        fileUrl (Optional[str]): Deprecated and no longer supported.
         folder_id (str): The ID of the parent folder. Defaults to 'root'. For shared drives, this must be a folder ID within the shared drive.
         mime_type (str): The MIME type of the file. Defaults to 'text/plain'.
 
@@ -339,18 +338,28 @@ async def create_drive_file(
         f"[create_drive_file] Invoked. Email: '{user_google_email}', File Name: {file_name}, Folder ID: {folder_id}"
     )
 
+    if fileUrl is not None:
+        raise Exception(
+            "'fileUrl' is no longer supported. Use 'content' for text or 'content_base64' for binary uploads."
+        )
+
     mode_count = int(content is not None) + int(content_base64 is not None)
     if mode_count != 1:
         raise Exception(
             "Provide exactly one input mode: either 'content' or 'content_base64'."
         )
 
+    max_bytes = _get_binary_upload_max_bytes()
     if content_base64 is not None:
+        estimated_size = estimate_base64_decoded_size_upper_bound(content_base64)
+        if estimated_size > max_bytes:
+            raise Exception(
+                f"File payload too large: decoded size estimate exceeds limit of {max_bytes} bytes."
+            )
         file_data = _decode_base64_content(content_base64)
     else:
         file_data = content.encode("utf-8") if content is not None else b""
 
-    max_bytes = _get_binary_upload_max_bytes()
     if len(file_data) > max_bytes:
         raise Exception(
             f"File payload too large: {len(file_data)} bytes exceeds limit of {max_bytes} bytes."

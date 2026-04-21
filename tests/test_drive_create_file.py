@@ -140,3 +140,34 @@ async def test_create_drive_file_rejects_payload_over_size_limit(monkeypatch):
             content_base64=oversized_payload,
             mime_type="application/zip",
         )
+
+
+@pytest.mark.asyncio
+async def test_create_drive_file_precheck_rejects_large_base64_before_decode(monkeypatch):
+    monkeypatch.setenv("WORKSPACE_MCP_BINARY_UPLOAD_MAX_BYTES", "4")
+
+    with pytest.raises(
+        Exception,
+        match="decoded size estimate exceeds",
+    ):
+        await _unwrap_create_drive_file()(
+            _FakeService(),
+            "user@example.com",
+            "archive.zip",
+            content_base64="A" * 100,
+            mime_type="application/zip",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_drive_file_rejects_deprecated_fileurl_argument():
+    with pytest.raises(
+        Exception,
+        match="fileUrl' is no longer supported",
+    ):
+        await _unwrap_create_drive_file()(
+            _FakeService(),
+            "user@example.com",
+            "archive.zip",
+            fileUrl="https://example.com/archive.zip",
+        )
