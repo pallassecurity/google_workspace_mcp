@@ -143,7 +143,9 @@ async def test_create_drive_file_rejects_payload_over_size_limit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_drive_file_precheck_rejects_large_base64_before_decode(monkeypatch):
+async def test_create_drive_file_precheck_rejects_large_base64_before_decode(
+    monkeypatch,
+):
     monkeypatch.setenv("WORKSPACE_MCP_BINARY_UPLOAD_MAX_BYTES", "4")
 
     with pytest.raises(
